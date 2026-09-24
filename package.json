@@ -13,7 +13,8 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "sync:contracts": "node scripts/sync-contracts.mjs"
   },
   "engines": {
     "node": ">=20.19"

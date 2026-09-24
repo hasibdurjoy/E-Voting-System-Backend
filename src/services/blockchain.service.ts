@@ -18,8 +18,10 @@ export interface BlockchainStatus {
   networkName?: string
   blockNumber?: number
   contractAddress?: string
-  contractOwner?: string
+  electionCount?: number
   backendWalletAddress?: string
+  /** Whether the backend signer holds RELAYER_ROLE, i.e. whether it can actually relay votes. */
+  relayerAuthorized?: boolean
 }
 
 /** Connectivity check for the configured RPC node, contract and backend signer. */
@@ -38,12 +40,22 @@ export async function getBlockchainStatus(): Promise<BlockchainStatus> {
     status.networkName = network.name
     status.blockNumber = blockNumber
 
-    if (status.contractConfigured) {
-      status.contractAddress = env.CONTRACT_ADDRESS
-      status.contractOwner = (await getReadOnlyContract().getFunction('owner')()) as string
-    }
     if (status.walletConfigured) {
       status.backendWalletAddress = getWallet().address
+    }
+    if (status.contractConfigured) {
+      status.contractAddress = env.CONTRACT_ADDRESS
+      const contract = getReadOnlyContract()
+      status.electionCount = Number((await contract.getFunction('electionCount')()) as bigint)
+
+      if (status.walletConfigured) {
+        // Surface a misconfigured relayer here rather than at the first failed vote.
+        const relayerRole = (await contract.getFunction('RELAYER_ROLE')()) as string
+        status.relayerAuthorized = (await contract.getFunction('hasRole')(
+          relayerRole,
+          status.backendWalletAddress,
+        )) as boolean
+      }
     }
   } catch (error) {
     if (error instanceof ApiError) throw error
