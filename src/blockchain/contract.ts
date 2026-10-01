@@ -3,7 +3,7 @@ import { env } from '../config/env.js'
 import { ApiError } from '../utils/ApiError.js'
 import { VOTING_REGISTRY_ABI } from './abi/index.js'
 import { getProvider } from './provider.js'
-import { getWallet } from './wallet.js'
+import { getRelayerSigner } from './wallet.js'
 
 export function isContractConfigured(): boolean {
   return Boolean(env.CONTRACT_ADDRESS)
@@ -23,5 +23,5 @@ export function getReadOnlyContract(): Contract {
 
 /** Contract instance connected to the backend signer (can send transactions). */
 export function getSignerContract(): Contract {
-  return new Contract(getContractAddress(), VOTING_REGISTRY_ABI as unknown as InterfaceAbi, getWallet())
+  return new Contract(getContractAddress(), VOTING_REGISTRY_ABI as unknown as InterfaceAbi, getRelayerSigner())
 }

@@ -1,6 +1,9 @@
 import { createApp } from './app.js'
 import { connectDatabase, disconnectDatabase } from './config/database.js'
 import { env } from './config/env.js'
+import { isRelayerAuthorized } from './services/relayer.service.js'
+import { startEventListener, stopEventListener } from './services/events.service.js'
+import { isContractConfigured, isWalletConfigured } from './blockchain/index.js'
 import { logger } from './utils/logger.js'
 
 async function bootstrap() {
@@ -20,10 +23,28 @@ async function bootstrap() {
       return
     }
     logger.info(`E-Voting System API listening on http://localhost:${env.PORT}/api (${env.NODE_ENV})`)
+
+    // The chain is authoritative, so the cache is reconciled continuously rather than only
+    // when a request happens to touch it.
+    startEventListener()
+
+    // A relayer without RELAYER_ROLE fails every write. Saying so at startup beats
+    // discovering it when the first voter tries to register.
+    if (isContractConfigured() && isWalletConfigured()) {
+      void isRelayerAuthorized().then((authorized) => {
+        if (!authorized) {
+          logger.warn(
+            'The backend signer does not hold RELAYER_ROLE: registrations, votes and admin ' +
+              'writes will all revert. Grant the role (see the contracts INTEGRATION guide §1).',
+          )
+        }
+      })
+    }
   })
 
   const shutdown = (signal: string) => {
     logger.info(`${signal} received, shutting down gracefully...`)
+    stopEventListener()
     server.close(async () => {
       await disconnectDatabase()
       process.exit(0)

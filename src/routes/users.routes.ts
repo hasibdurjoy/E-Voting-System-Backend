@@ -1,9 +1,10 @@
 import { Router } from 'express'
-import { notImplemented } from '../controllers/placeholder.controller.js'
+import { getMe } from '../controllers/auth.controller.js'
+import { requireAuth } from '../middleware/auth.js'
 
-// Placeholder — Users endpoints will be implemented in a later phase.
 const router = Router()
 
-router.all('/{*path}', notImplemented('Users'))
+/** `/api/users/me` is an alias of `/api/auth/me`; the frontend uses the latter. */
+router.get('/me', requireAuth, getMe)
 
 export default router

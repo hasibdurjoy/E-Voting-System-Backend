@@ -5,6 +5,7 @@ import blockchainRoutes from './blockchain.routes.js'
 import candidateRoutes from './candidates.routes.js'
 import electionRoutes from './elections.routes.js'
 import healthRoutes from './health.routes.js'
+import trusteeRoutes from './trustee.routes.js'
 import userRoutes from './users.routes.js'
 import voteRoutes from './votes.routes.js'
 
@@ -17,6 +18,7 @@ router.use('/elections', electionRoutes)
 router.use('/candidates', candidateRoutes)
 router.use('/votes', voteRoutes)
 router.use('/admin', adminRoutes)
+router.use('/trustee', trusteeRoutes)
 router.use('/blockchain', blockchainRoutes)
 
 export default router

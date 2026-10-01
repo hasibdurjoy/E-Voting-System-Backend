@@ -1,9 +1,13 @@
 import { Router } from 'express'
-import { notImplemented } from '../controllers/placeholder.controller.js'
+import { getMyReceipts, postVote } from '../controllers/vote.controller.js'
+import { requireAuth, requireRole } from '../middleware/auth.js'
+import { voteLimiter } from '../middleware/rateLimiters.js'
+import { validate } from '../middleware/validate.js'
+import { castVoteSchema } from '../validators/election.validator.js'
 
-// Placeholder — Votes endpoints will be implemented in a later phase.
 const router = Router()
 
-router.all('/{*path}', notImplemented('Votes'))
+router.post('/', requireAuth, requireRole('voter', 'admin', 'trustee'), voteLimiter, validate({ body: castVoteSchema }), postVote)
+router.get('/me', requireAuth, getMyReceipts)
 
 export default router

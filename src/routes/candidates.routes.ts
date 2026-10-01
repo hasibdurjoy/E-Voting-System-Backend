@@ -1,9 +1,11 @@
 import { Router } from 'express'
-import { notImplemented } from '../controllers/placeholder.controller.js'
+import { getMyCandidacies } from '../controllers/election.controller.js'
+import { requireAuth } from '../middleware/auth.js'
 
-// Placeholder — Candidates endpoints will be implemented in a later phase.
 const router = Router()
 
-router.all('/{*path}', notImplemented('Candidates'))
+// A voter may read their own candidacies and nobody else's — the user is taken from the
+// session, never from a query parameter.
+router.get('/me', requireAuth, getMyCandidacies)
 
 export default router
