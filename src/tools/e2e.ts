@@ -249,14 +249,79 @@ async function main(): Promise<void> {
   check('voter commitment anchored on-chain with a transaction hash', /^0x[0-9a-f]{64}$/.test(me.body.data?.registrationTxHash ?? ''))
   check('National ID is returned masked only', me.body.data?.maskedNid === '•••• •••• 6778', me.body.data?.maskedNid)
 
-  // ── 5–6 election with key and trustees ─────────────────────────────────────
-  step(5, 'Admin creates an election; key and trustees configured')
-
   const adminToken = await login('admin@evoting.test')
+
+  // ── Upazila setup: areas must exist before anyone is registered into them ──
+  const areas = await call<{ upazilaId: number; name: string }[]>('GET', '/upazilas')
+  check('the Upazila catalogue is public', areas.status === 200 && (areas.body.data?.length ?? 0) >= 2)
+  const HOME_AREA = 101
+  const OTHER_AREA = 202
+
+  // A development chain keeps the elections of earlier runs. Any still inside its voting
+  // window would (correctly) block transfers, so the clock is wound past them first —
+  // the equivalent of starting the scenario on a fresh chain.
+  const existing = await call<{ id: number; endTime: string; status: number }[]>('GET', '/elections')
+  const openEnds = (existing.body.data ?? [])
+    .filter((election) => election.status < 3)
+    .map((election) => Math.floor(Date.parse(election.endTime) / 1000))
+  if (openEnds.length > 0) {
+    const latestEnd = Math.max(...openEnds)
+    const secondsPast = latestEnd - (await chainNow())
+    if (secondsPast > 0) {
+      console.log(`     winding the chain clock ${secondsPast}s past ${openEnds.length} election(s) left open by an earlier run…`)
+      await advanceChain(secondsPast + 10)
+      await sleep(1200)
+    }
+  }
+
   const chainStart = await chainNow()
   const registrationEnd = (chainStart + 120) * 1000
   const votingStart = (chainStart + 150) * 1000
   const votingEnd = (chainStart + 1800) * 1000
+
+  // ── Area transfer: a voter moves Upazila before any election is under way ──
+  step(4, 'A voter transfers to another Upazila, approved by a validator')
+
+  const mover = await registerVoter('1996090011223', 'Rashed Karim', '1996-09-01')
+  const moverBefore = await call<{ upazilaId: number; upazilaName: string | null }>('GET', '/auth/me', {
+    token: mover.token,
+  })
+  const areaBefore = moverBefore.body.data?.upazilaId ?? 0
+  check(
+    'the registry decided the voter’s area, not the voter',
+    areaBefore === HOME_AREA || areaBefore === OTHER_AREA,
+    String(areaBefore),
+  )
+  check('and the area is reported with its name', Boolean(moverBefore.body.data?.upazilaName))
+
+  // Whichever area they are in, move them to the other one — so a re-run works too.
+  const targetArea = areaBefore === HOME_AREA ? OTHER_AREA : HOME_AREA
+
+  const transferFiled = await call<{ id: string; status: string }>('POST', '/transfers', {
+    token: mover.token,
+    body: { toUpazilaId: targetArea, evidence: 'Tenancy agreement dated this month, reference E2E-1.' },
+  })
+  check('transfer request accepted', transferFiled.status === 201, transferFiled.body.message)
+
+  const queue = await call<{ id: string }[]>('GET', '/admin/transfers', { token: adminToken })
+  check('the request reaches the validator queue', (queue.body.data?.length ?? 0) >= 1)
+
+  const approved = await call<{ status: string; txHash: string }>(
+    'POST',
+    `/admin/transfers/${transferFiled.body.data!.id}/decide`,
+    { token: adminToken, body: { approve: true } },
+  )
+  check('transfer approved and written on-chain', approved.body.data?.status === 'approved' && /^0x[0-9a-f]{64}$/.test(approved.body.data.txHash))
+
+  const moverAfter = await call<{ upazilaId: number }>('GET', '/auth/me', { token: mover.token })
+  check(
+    'the voter now belongs to exactly one area — the new one',
+    moverAfter.body.data?.upazilaId === targetArea,
+    String(moverAfter.body.data?.upazilaId),
+  )
+
+  step(5, 'Admin creates an area-scoped election; key and trustees configured')
+
   const created = await call<{
     id: number
     status: number
@@ -266,8 +331,9 @@ async function main(): Promise<void> {
   }>('POST', '/elections', {
     token: adminToken,
     body: {
-      name: `E2E Election ${stamp}`,
-      description: 'End-to-end acceptance scenario',
+      name: `E2E Shapla Upazila Election ${stamp}`,
+      description: 'End-to-end acceptance scenario, scoped to one Upazila',
+      upazilaId: HOME_AREA,
       candidateRegistrationEnd: new Date(registrationEnd).toISOString(),
       startTime: new Date(votingStart).toISOString(),
       endTime: new Date(votingEnd).toISOString(),
@@ -280,10 +346,13 @@ async function main(): Promise<void> {
   check('threshold is at least 2', created.body.data!.trusteeThreshold >= 2)
   check('one key share per trustee, returned exactly once', created.body.data!.trusteeShares.length === 3)
 
-  const detail = await call<{ publicKey: { n: string; nSquared: string; ballotBase: string } | null }>(
-    'GET',
-    `/elections/${electionId}`,
-  )
+  const detail = await call<{
+    publicKey: { n: string; nSquared: string; ballotBase: string } | null
+    upazilaId: number
+    upazilaName: string | null
+  }>('GET', `/elections/${electionId}`)
+  check('the election records its Upazila', detail.body.data?.upazilaId === HOME_AREA)
+  check('and reports the area name for the UI', Boolean(detail.body.data?.upazilaName))
   const publicKey = detail.body.data!.publicKey!
   check('public key published for the browser to encrypt with', Boolean(publicKey?.n))
   const nBytes = (publicKey.n.length - 2) / 2
@@ -426,6 +495,56 @@ async function main(): Promise<void> {
   })
   check('a second ballot from the same voter is refused with 409', secondVote.status === 409, String(secondVote.status))
 
+  // ── Area scoping and disputes, while the election is still open ────────────
+  step(15, 'A voter from another Upazila, and a dispute that suspends eligibility')
+
+  const outsider = await registerVoter('1997060011224', 'Shireen Akter', '1997-06-01')
+  const outsiderEligibility = await call<{ reason: string; electionUpazilaName: string | null }>(
+    'GET',
+    `/elections/${electionId}/eligibility`,
+    { token: outsider.token },
+  )
+  check(
+    'a voter from another Upazila is reported as wrong-area',
+    outsiderEligibility.body.data?.reason === 'wrong-area',
+    outsiderEligibility.body.data?.reason,
+  )
+  check('and the message names the election’s area', Boolean(outsiderEligibility.body.data?.electionUpazilaName))
+
+  const outsiderVote = await call('POST', '/votes', {
+    token: outsider.token,
+    body: { electionId, ciphertext: encryptBallot(0, publicKey) },
+  })
+  check('their ballot is refused with 403', outsiderVote.status === 403, String(outsiderVote.status))
+
+  const dispute = await call<{ id: string; status: string }>('POST', '/disputes', {
+    token: outsider.token,
+    body: { category: 'wrong-area', detail: 'My address is in Shapla, but my record shows Kadam.' },
+  })
+  check('a dispute can be raised', dispute.status === 201, dispute.body.message)
+
+  const onHold = await call<{ reason: string }>('GET', `/elections/${electionId}/eligibility`, {
+    token: outsider.token,
+  })
+  check('raising it suspends eligibility on-chain', onHold.body.data?.reason === 'account-on-hold', onHold.body.data?.reason)
+
+  const resolved = await call<{ status: string }>('POST', `/admin/disputes/${dispute.body.data!.id}/resolve`, {
+    token: adminToken,
+    body: {
+      outcome: 'upheld',
+      resolution: 'Registry address confirmed as Shapla; area corrected.',
+      correctedUpazilaId: HOME_AREA,
+    },
+  })
+  check('a validator resolves it', resolved.body.data?.status === 'upheld', resolved.body.message)
+
+  const afterResolution = await call<{ eligible: boolean }>('GET', `/elections/${electionId}/eligibility`, {
+    token: outsider.token,
+  })
+  check('the corrected voter is eligible again', afterResolution.body.data?.eligible === true)
+
+  // Deliberately not voting: the expected tally below is the one cast above.
+
   // ── 16 close ───────────────────────────────────────────────────────────────
   step(16, 'Closing the election')
 
@@ -535,6 +654,29 @@ async function main(): Promise<void> {
   for (const entry of publicResult.body.data?.results ?? []) {
     console.log(`     ${entry.fullName.padEnd(20)} ${String(entry.votes).padStart(2)} votes  ${entry.percentage}%`)
   }
+
+  // ── 20 the cutoff lifts once the election is over ──────────────────────────
+  step(20, 'Transfers reopen once the election has finished')
+
+  // The dispute above corrected this voter into the election's Upazila. Moving them back
+  // both restores the fixture state — so the scenario can be run again — and shows that
+  // the transfer cutoff applies only while an election is actually under way.
+  const restoreFiled = await call<{ id: string }>('POST', '/transfers', {
+    token: outsider.token,
+    body: { toUpazilaId: OTHER_AREA, evidence: 'Returning to the registered address after the election.' },
+  })
+  check(
+    'a transfer can be filed again now the election has finished',
+    restoreFiled.status === 201,
+    restoreFiled.body.message,
+  )
+
+  const restoreApproved = await call<{ status: string }>(
+    'POST',
+    `/admin/transfers/${restoreFiled.body.data!.id}/decide`,
+    { token: adminToken, body: { approve: true } },
+  )
+  check('and is approved, restoring the voter’s original area', restoreApproved.body.data?.status === 'approved')
 
   rmSync(shareDir, { recursive: true, force: true })
 

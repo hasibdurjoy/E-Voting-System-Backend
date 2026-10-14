@@ -68,6 +68,14 @@ export async function applyAsCandidate(
   if (user.revoked) {
     throw ApiError.forbidden('This account has been suspended. Contact the Election Commission.')
   }
+  if (user.onHold) {
+    throw ApiError.forbidden('Your registration is on hold while a dispute about your record is reviewed.')
+  }
+  // A candidate stands in their own Upazila. The contract enforces this too; checking
+  // here turns a decoded revert into a sentence that explains itself.
+  if (chain.upazilaId !== 0 && chain.upazilaId !== (user.upazilaId ?? 0)) {
+    throw ApiError.forbidden('You can only stand as a candidate in the Upazila you are registered in.')
+  }
   if (await Candidate.exists({ chainElectionId: input.electionId, userId: user._id })) {
     throw ApiError.conflict('You have already applied for this election.')
   }

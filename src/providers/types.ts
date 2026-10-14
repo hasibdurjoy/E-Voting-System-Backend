@@ -6,6 +6,13 @@ export interface NidLookupResult {
   /** ISO date. */
   dateOfBirth?: string
   isCitizen?: boolean
+  /** Registered address, as the civil registry holds it. */
+  address?: string
+  /**
+   * The Upazila the registry's address falls in. This is what a validator approves and
+   * what becomes the voter's on-chain eligibility tag — the voter does not choose it.
+   */
+  upazilaId?: number
 }
 
 export interface NidProvider {

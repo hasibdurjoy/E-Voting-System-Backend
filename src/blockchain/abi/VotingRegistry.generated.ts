@@ -3,9 +3,9 @@
  * Source: e-voting-system-smart-contracts/abi/VotingRegistry.json
  * Regenerate with `yarn sync:contracts`; verify with `yarn sync:contracts --check`.
  *
- * sha256: 31ef736478f8416567a7449e7e47495001f21212aac51b0eb44777d8613b3667
+ * sha256: 74884ab86b3a2e531f403df48c365eb0246978fbde995f5b1524c16b1bc0ffde
  */
-export const VOTING_REGISTRY_ABI_SHA256 = '31ef736478f8416567a7449e7e47495001f21212aac51b0eb44777d8613b3667' as const
+export const VOTING_REGISTRY_ABI_SHA256 = '74884ab86b3a2e531f403df48c365eb0246978fbde995f5b1524c16b1bc0ffde' as const
 
 export const VOTING_REGISTRY_ABI = [
   {
@@ -54,6 +54,22 @@ export const VOTING_REGISTRY_ABI = [
       }
     ],
     "name": "AlreadyVoted",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "voterCommitment",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
+      }
+    ],
+    "name": "AreaUnchanged",
     "type": "error"
   },
   {
@@ -171,6 +187,11 @@ export const VOTING_REGISTRY_ABI = [
   {
     "inputs": [],
     "name": "EmptyElectionName",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EmptyUpazilaName",
     "type": "error"
   },
   {
@@ -340,6 +361,28 @@ export const VOTING_REGISTRY_ABI = [
   {
     "inputs": [
       {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
+      }
+    ],
+    "name": "UnknownUpazila",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
+      }
+    ],
+    "name": "UpazilaAlreadyRegistered",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "bytes32",
         "name": "voterCommitment",
         "type": "bytes32"
@@ -367,7 +410,34 @@ export const VOTING_REGISTRY_ABI = [
         "type": "bytes32"
       }
     ],
+    "name": "VoterOnHoldError",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "voterCommitment",
+        "type": "bytes32"
+      }
+    ],
     "name": "VoterRevokedError",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint32",
+        "name": "expected",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "actual",
+        "type": "uint32"
+      }
+    ],
+    "name": "WrongUpazila",
     "type": "error"
   },
   {
@@ -514,6 +584,12 @@ export const VOTING_REGISTRY_ABI = [
         "internalType": "uint64",
         "name": "endTime",
         "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
       }
     ],
     "name": "ElectionCreated",
@@ -687,6 +763,25 @@ export const VOTING_REGISTRY_ABI = [
     "inputs": [
       {
         "indexed": true,
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "name",
+        "type": "string"
+      }
+    ],
+    "name": "UpazilaRegistered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "uint256",
         "name": "electionId",
         "type": "uint256"
@@ -729,6 +824,56 @@ export const VOTING_REGISTRY_ABI = [
         "type": "bytes32"
       },
       {
+        "indexed": false,
+        "internalType": "uint32",
+        "name": "previousUpazilaId",
+        "type": "uint32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint32",
+        "name": "newUpazilaId",
+        "type": "uint32"
+      }
+    ],
+    "name": "VoterAreaChanged",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "voterCommitment",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "onHold",
+        "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "reasonHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "VoterHoldChanged",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "voterCommitment",
+        "type": "bytes32"
+      },
+      {
         "indexed": true,
         "internalType": "address",
         "name": "wallet",
@@ -739,6 +884,12 @@ export const VOTING_REGISTRY_ABI = [
         "internalType": "uint64",
         "name": "registeredAt",
         "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
       }
     ],
     "name": "VoterRegistered",
@@ -856,6 +1007,11 @@ export const VOTING_REGISTRY_ABI = [
         "internalType": "string",
         "name": "description",
         "type": "string"
+      },
+      {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
       },
       {
         "internalType": "uint64",
@@ -1019,6 +1175,11 @@ export const VOTING_REGISTRY_ABI = [
             "type": "string"
           },
           {
+            "internalType": "uint32",
+            "name": "upazilaId",
+            "type": "uint32"
+          },
+          {
             "internalType": "uint64",
             "name": "candidateRegistrationEnd",
             "type": "uint64"
@@ -1180,6 +1341,25 @@ export const VOTING_REGISTRY_ABI = [
   {
     "inputs": [
       {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
+      }
+    ],
+    "name": "getUpazilaName",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "bytes32",
         "name": "voterCommitment",
         "type": "bytes32"
@@ -1200,6 +1380,11 @@ export const VOTING_REGISTRY_ABI = [
             "type": "address"
           },
           {
+            "internalType": "uint32",
+            "name": "upazilaId",
+            "type": "uint32"
+          },
+          {
             "internalType": "uint64",
             "name": "registeredAt",
             "type": "uint64"
@@ -1208,11 +1393,35 @@ export const VOTING_REGISTRY_ABI = [
             "internalType": "bool",
             "name": "revoked",
             "type": "bool"
+          },
+          {
+            "internalType": "bool",
+            "name": "onHold",
+            "type": "bool"
           }
         ],
         "internalType": "struct VotingRegistry.Voter",
         "name": "",
         "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "voterCommitment",
+        "type": "bytes32"
+      }
+    ],
+    "name": "getVoterUpazila",
+    "outputs": [
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
       }
     ],
     "stateMutability": "view",
@@ -1354,6 +1563,25 @@ export const VOTING_REGISTRY_ABI = [
   {
     "inputs": [
       {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
+      }
+    ],
+    "name": "isUpazila",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "uint256",
         "name": "electionId",
         "type": "uint256"
@@ -1427,6 +1655,24 @@ export const VOTING_REGISTRY_ABI = [
   {
     "inputs": [
       {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
+      },
+      {
+        "internalType": "string",
+        "name": "name",
+        "type": "string"
+      }
+    ],
+    "name": "registerUpazila",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "bytes32",
         "name": "voterCommitment",
         "type": "bytes32"
@@ -1435,6 +1681,11 @@ export const VOTING_REGISTRY_ABI = [
         "internalType": "address",
         "name": "wallet",
         "type": "address"
+      },
+      {
+        "internalType": "uint32",
+        "name": "upazilaId",
+        "type": "uint32"
       }
     ],
     "name": "registerVoter",
@@ -1563,6 +1814,29 @@ export const VOTING_REGISTRY_ABI = [
   {
     "inputs": [
       {
+        "internalType": "bytes32",
+        "name": "voterCommitment",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bool",
+        "name": "onHold",
+        "type": "bool"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "reasonHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "setVoterHold",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "uint256",
         "name": "electionId",
         "type": "uint256"
@@ -1592,6 +1866,37 @@ export const VOTING_REGISTRY_ABI = [
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "voterCommitment",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "newUpazilaId",
+        "type": "uint32"
+      }
+    ],
+    "name": "transferVoterArea",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "upazilaCount",
+    "outputs": [
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
       }
     ],
     "stateMutability": "view",

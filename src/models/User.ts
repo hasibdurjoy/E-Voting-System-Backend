@@ -24,6 +24,13 @@ const userSchema = new Schema(
     nidMasked: { type: String, required: true },
 
     dateOfBirth: { type: Date, required: true },
+    /**
+     * The voter's Upazila, resolved from their National ID record when a validator
+     * approved them. It is an eligibility tag, and the same value is held on-chain.
+     */
+    upazilaId: { type: Number, required: true, index: true },
+    /** True while a dispute about this voter's record is unresolved. */
+    onHold: { type: Boolean, default: false },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     phone: { type: String, default: null },
     passwordHash: { type: String, required: true, select: false },

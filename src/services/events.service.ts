@@ -11,7 +11,7 @@
 import type { Contract, Log } from 'ethers'
 import { getProvider, getReadOnlyContract, isContractConfigured, isProviderConfigured } from '../blockchain/index.js'
 import { env } from '../config/env.js'
-import { Candidate, DecryptionSession, Election, EventCursor, Trustee, User, VoteReceipt } from '../models/index.js'
+import { Candidate, DecryptionSession, Election, EventCursor, Trustee, Upazila, User, VoteReceipt } from '../models/index.js'
 import { ElectionStatus } from '../types/domain.js'
 import { logger } from '../utils/logger.js'
 
@@ -31,6 +31,24 @@ async function handleVoterRegistered(args: EventArgs, log: Log): Promise<void> {
 
 async function handleVoterRevoked(args: EventArgs): Promise<void> {
   await User.updateOne({ voterCommitment: String(args[0]) }, { $set: { revoked: true } })
+}
+
+async function handleUpazilaRegistered(args: EventArgs, log: Log): Promise<void> {
+  const upazilaId = Number(args[0])
+  await Upazila.updateOne(
+    { upazilaId },
+    { $set: { name: String(args[1]), txHash: log.transactionHash } },
+    { upsert: true },
+  )
+}
+
+/** The chain is authoritative for a voter's area, including after a transfer. */
+async function handleVoterAreaChanged(args: EventArgs): Promise<void> {
+  await User.updateOne({ voterCommitment: String(args[0]) }, { $set: { upazilaId: Number(args[2]) } })
+}
+
+async function handleVoterHoldChanged(args: EventArgs): Promise<void> {
+  await User.updateOne({ voterCommitment: String(args[0]) }, { $set: { onHold: Boolean(args[1]) } })
 }
 
 async function handleElectionStatusChanged(args: EventArgs): Promise<void> {
@@ -87,8 +105,11 @@ async function handleResultPublished(args: EventArgs, log: Log): Promise<void> {
 }
 
 const HANDLERS: Record<string, (args: EventArgs, log: Log) => Promise<void>> = {
+  UpazilaRegistered: handleUpazilaRegistered,
   VoterRegistered: handleVoterRegistered,
   VoterRevoked: handleVoterRevoked,
+  VoterAreaChanged: handleVoterAreaChanged,
+  VoterHoldChanged: handleVoterHoldChanged,
   ElectionStatusChanged: handleElectionStatusChanged,
   CandidateStatusChanged: handleCandidateStatusChanged,
   VoteCast: handleVoteCast,

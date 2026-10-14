@@ -32,3 +32,7 @@ export type IneligibilityReason =
   | 'account-revoked'
   | 'election-not-open'
   | 'already-voted'
+  /** The election belongs to a different Upazila from the voter's. */
+  | 'wrong-area'
+  /** A dispute about the voter's record is unresolved, so participation is suspended. */
+  | 'account-on-hold'

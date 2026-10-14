@@ -17,6 +17,7 @@ import { env } from '../config/env.js'
 import { RegistrationSession, User, VerificationRecord, type UserDocument } from '../models/index.js'
 import { faceProvider, nidProvider } from '../providers/index.js'
 import { ApiError } from '../utils/ApiError.js'
+import { assertUpazilaExists, upazilaName } from './area.service.js'
 import { relay } from './relayer.service.js'
 
 export type UserRole = 'voter' | 'admin' | 'trustee'
@@ -32,6 +33,11 @@ export interface UserDto {
   registeredAt: string
   revoked: boolean
   registrationTxHash: string | null
+  /** The voter's Upazila: which elections they are entitled to vote in. */
+  upazilaId: number
+  upazilaName: string | null
+  /** True while a dispute about this record is unresolved. */
+  onHold: boolean
 }
 
 export interface AuthSession {
@@ -44,7 +50,16 @@ interface UserRecord extends UserDocument {
   _id: Types.ObjectId
 }
 
-export function toUserDto(user: UserRecord): UserDto {
+/**
+ * Resolves the area name as well, so every path that returns a user agrees.
+ * `toUserDto` alone leaves `upazilaName` null, which is right for callers that already
+ * have the name and wrong for everyone else — this is the one to reach for by default.
+ */
+export async function toUserDtoWithArea(user: UserRecord): Promise<UserDto> {
+  return toUserDto(user, await upazilaName(user.upazilaId ?? 0))
+}
+
+export function toUserDto(user: UserRecord, areaName: string | null = null): UserDto {
   return {
     id: String(user._id),
     fullName: user.fullName,
@@ -56,6 +71,9 @@ export function toUserDto(user: UserRecord): UserDto {
     registeredAt: new Date(user.registeredAt ?? Date.now()).toISOString(),
     revoked: Boolean(user.revoked),
     registrationTxHash: user.registrationTxHash ?? null,
+    upazilaId: user.upazilaId ?? 0,
+    upazilaName: areaName,
+    onHold: Boolean(user.onHold),
   }
 }
 
@@ -118,6 +136,9 @@ export interface NidVerificationResult {
   registrationToken: string
   ageVerified: boolean
   citizenshipVerified: boolean
+  /** The area resolved from the registry address, shown so the voter can dispute it. */
+  upazilaId: number
+  upazilaName: string | null
 }
 
 export async function verifyNidStep(input: NidVerificationInput): Promise<NidVerificationResult> {
@@ -170,6 +191,16 @@ export async function verifyNidStep(input: NidVerificationInput): Promise<NidVer
     throw ApiError.conflict('A voter is already registered with this National ID.')
   }
 
+  // The area comes from the registry's address, never from the applicant. A voter who
+  // believes it is wrong raises a dispute rather than choosing a different one.
+  if (!record.upazilaId) {
+    await recordVerification('failed', 'no-area')
+    throw ApiError.unprocessable(
+      'Your address could not be matched to an Upazila. Please contact the Election Commission.',
+    )
+  }
+  await assertUpazilaExists(record.upazilaId)
+
   const registrationToken = randomBytes(24).toString('hex')
   await RegistrationSession.create({
     token: registrationToken,
@@ -177,6 +208,7 @@ export async function verifyNidStep(input: NidVerificationInput): Promise<NidVer
     nidLookupHash: lookupHash,
     fullName: record.fullName,
     dateOfBirth,
+    upazilaId: record.upazilaId,
     nidVerified: true,
   })
   await recordVerification('passed')
@@ -189,6 +221,8 @@ export async function verifyNidStep(input: NidVerificationInput): Promise<NidVer
     // Only `true` when the registry affirmed it; a provider that does not report
     // citizenship has not verified it, and saying otherwise would overstate the check.
     citizenshipVerified: record.isCitizen === true,
+    upazilaId: record.upazilaId,
+    upazilaName: await upazilaName(record.upazilaId),
   }
 }
 
@@ -279,7 +313,8 @@ export async function completeRegistration(input: CompleteRegistrationInput): Pr
 
   // On-chain first: an account must never exist without an anchored commitment. If the
   // transaction reverts, nothing is written locally and the voter can try again.
-  const receipt = await relay('registerVoter', 'registerVoter', [commitment, ZeroAddress])
+  // The area tag goes on-chain with the registration — it is the eligibility rule.
+  const receipt = await relay('registerVoter', 'registerVoter', [commitment, ZeroAddress, session.upazilaId])
 
   const user = await User.create({
     fullName: session.fullName,
@@ -289,6 +324,7 @@ export async function completeRegistration(input: CompleteRegistrationInput): Pr
     commitmentSalt: encryptPii(salt, env.PII_ENCRYPTION_KEY),
     voterCommitment: commitment,
     dateOfBirth: session.dateOfBirth,
+    upazilaId: session.upazilaId,
     email,
     phone: input.phone,
     passwordHash: await hashPassword(input.password),
@@ -301,7 +337,11 @@ export async function completeRegistration(input: CompleteRegistrationInput): Pr
   await RegistrationSession.deleteOne({ _id: session._id })
 
   const { token, expiresAt } = issueToken(user as unknown as UserRecord)
-  return { token, user: toUserDto(user as unknown as UserRecord), expiresAt }
+  return {
+    token,
+    user: toUserDto(user as unknown as UserRecord, await upazilaName(session.upazilaId)),
+    expiresAt,
+  }
 }
 
 // ── login ────────────────────────────────────────────────────────────────────
@@ -360,5 +400,5 @@ export async function login(input: LoginInput): Promise<AuthSession> {
 
   const record = user as unknown as UserRecord
   const { token, expiresAt } = issueToken(record)
-  return { token, user: toUserDto(record), expiresAt }
+  return { token, user: toUserDto(record, await upazilaName(record.upazilaId ?? 0)), expiresAt }
 }

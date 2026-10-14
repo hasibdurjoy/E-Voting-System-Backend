@@ -5,7 +5,7 @@ import { audit } from '../services/audit.service.js'
 import {
   completeRegistration,
   login,
-  toUserDto,
+  toUserDtoWithArea,
   verifyFaceStep,
   verifyNidStep,
   type CompleteRegistrationInput,
@@ -76,8 +76,8 @@ export const postLogin: RequestHandler = async (req, res) => {
   }
 }
 
-export const getMe: RequestHandler = (req: Request, res) => {
-  res.json({ success: true, data: toUserDto(currentUser(req)) })
+export const getMe: RequestHandler = async (req: Request, res) => {
+  res.json({ success: true, data: await toUserDtoWithArea(currentUser(req)) })
 }
 
 /**

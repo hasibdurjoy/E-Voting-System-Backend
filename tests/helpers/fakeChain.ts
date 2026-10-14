@@ -34,6 +34,7 @@ interface FakeElection {
   id: number
   name: string
   description: string
+  upazilaId: number
   candidateRegistrationEnd: bigint
   startTime: bigint
   endTime: bigint
@@ -58,22 +59,71 @@ function hexOfWidth(seed: number, bytes: number): string {
 }
 
 export class FakeChain {
-  readonly voters = new Map<string, { revoked: boolean; wallet: string; registeredAt: number }>()
+  readonly voters = new Map<
+    string,
+    { revoked: boolean; onHold: boolean; wallet: string; upazilaId: number; registeredAt: number }
+  >()
   readonly elections = new Map<number, FakeElection>()
+  readonly upazilas = new Map<number, string>()
   blockNumber = 100
 
   reset(): void {
     this.voters.clear()
     this.elections.clear()
+    this.upazilas.clear()
+    // The areas the test fixtures register voters into.
+    this.upazilas.set(101, 'Shapla Test Upazila')
+    this.upazilas.set(202, 'Kadam Test Upazila')
     this.blockNumber = 100
+  }
+
+  registerUpazila(upazilaId: number, name: string): void {
+    if (upazilaId === 0) throw new ContractRevert('UnknownUpazila', [upazilaId])
+    if (this.upazilas.has(upazilaId)) throw new ContractRevert('UpazilaAlreadyRegistered', [upazilaId])
+    if (!name) throw new ContractRevert('EmptyUpazilaName')
+    this.upazilas.set(upazilaId, name)
+  }
+
+  transferVoterArea(commitment: string, newUpazilaId: number): void {
+    const voter = this.voters.get(commitment)
+    if (!voter) throw new ContractRevert('VoterNotRegistered', [commitment])
+    if (!this.upazilas.has(newUpazilaId)) throw new ContractRevert('UnknownUpazila', [newUpazilaId])
+    if (voter.upazilaId === newUpazilaId) throw new ContractRevert('AreaUnchanged', [commitment, newUpazilaId])
+    voter.upazilaId = newUpazilaId
+  }
+
+  setVoterHold(commitment: string, onHold: boolean): void {
+    const voter = this.voters.get(commitment)
+    if (!voter) throw new ContractRevert('VoterNotRegistered', [commitment])
+    voter.onHold = onHold
+  }
+
+  /** The contract's eligibility predicate, exposed for assertions. */
+  isRegisteredVoter(commitment: string): boolean {
+    const voter = this.voters.get(commitment)
+    return Boolean(voter && !voter.revoked && !voter.onHold)
+  }
+
+  /** The area rule, mirrored from the contract: 0 admits every area. */
+  private requireMatchingArea(electionUpazilaId: number, voterUpazilaId: number): void {
+    if (electionUpazilaId !== 0 && electionUpazilaId !== voterUpazilaId) {
+      throw new ContractRevert('WrongUpazila', [electionUpazilaId, voterUpazilaId])
+    }
   }
 
   // ── writes (what the relayer would send) ───────────────────────────────────
 
-  registerVoter(commitment: string, wallet: string): void {
+  registerVoter(commitment: string, wallet: string, upazilaId: number): void {
     if (!commitment || /^0x0+$/.test(commitment)) throw new ContractRevert('EmptyCommitment')
     if (this.voters.has(commitment)) throw new ContractRevert('VoterAlreadyRegistered', [commitment])
-    this.voters.set(commitment, { revoked: false, wallet, registeredAt: Math.floor(Date.now() / 1000) })
+    if (!this.upazilas.has(upazilaId)) throw new ContractRevert('UnknownUpazila', [upazilaId])
+    this.voters.set(commitment, {
+      revoked: false,
+      onHold: false,
+      wallet,
+      upazilaId,
+      registeredAt: Math.floor(Date.now() / 1000),
+    })
   }
 
   revokeVoter(commitment: string): void {
@@ -86,10 +136,12 @@ export class FakeChain {
   createElection(
     name: string,
     description: string,
+    upazilaId: number,
     candidateRegistrationEnd: bigint,
     startTime: bigint,
     endTime: bigint,
   ): number {
+    if (upazilaId !== 0 && !this.upazilas.has(upazilaId)) throw new ContractRevert('UnknownUpazila', [upazilaId])
     if (candidateRegistrationEnd > startTime || startTime >= endTime) {
       throw new ContractRevert('InvalidElectionPeriod', [startTime, endTime])
     }
@@ -98,6 +150,7 @@ export class FakeChain {
       id,
       name,
       description,
+      upazilaId,
       candidateRegistrationEnd,
       startTime,
       endTime,
@@ -172,7 +225,9 @@ export class FakeChain {
       throw new ContractRevert('UnexpectedElectionStatus', [id, ElectionStatus.CandidateRegistration, election.status])
     }
     const voter = this.voters.get(commitment)
+    if (voter?.onHold) throw new ContractRevert('VoterOnHoldError', [commitment])
     if (!voter || voter.revoked) throw new ContractRevert('VoterNotRegistered', [commitment])
+    this.requireMatchingArea(election.upazilaId, voter.upazilaId)
     if (election.candidates.some((candidate) => candidate.voterCommitment === commitment)) {
       throw new ContractRevert('CandidateAlreadyRegistered', [id, commitment])
     }
@@ -210,7 +265,9 @@ export class FakeChain {
       throw new ContractRevert('ElectionNotOpen', [id])
     }
     const voter = this.voters.get(commitment)
+    if (voter?.onHold) throw new ContractRevert('VoterOnHoldError', [commitment])
     if (!voter || voter.revoked) throw new ContractRevert('VoterNotRegistered', [commitment])
+    this.requireMatchingArea(election.upazilaId, voter.upazilaId)
     if (election.votes.has(commitment)) throw new ContractRevert('AlreadyVoted', [id, commitment])
 
     const expected = (election.publicKeyNSquared.length - 2) / 2
@@ -256,6 +313,7 @@ export class FakeChain {
           id: BigInt(election.id),
           name: election.name,
           description: election.description,
+          upazilaId: BigInt(election.upazilaId),
           candidateRegistrationEnd: election.candidateRegistrationEnd,
           startTime: election.startTime,
           endTime: election.endTime,
@@ -288,17 +346,24 @@ export class FakeChain {
       getEncryptedTally: (id: number) => this.election(Number(id)).encryptedTally,
       getResult: (id: number) => this.election(Number(id)).result.map((value) => BigInt(value)),
       hasVoted: (id: number, commitment: string) => this.election(Number(id)).votes.has(commitment),
-      isRegisteredVoter: (commitment: string) => {
-        const voter = this.voters.get(commitment)
-        return Boolean(voter && !voter.revoked)
+      isRegisteredVoter: (commitment: string) => this.isRegisteredVoter(commitment),
+      isUpazila: (upazilaId: number) => this.upazilas.has(Number(upazilaId)),
+      getUpazilaName: (upazilaId: number) => {
+        const name = this.upazilas.get(Number(upazilaId))
+        if (!name) throw new ContractRevert('UnknownUpazila', [upazilaId])
+        return name
       },
+      getVoterUpazila: (commitment: string) => BigInt(this.voters.get(commitment)?.upazilaId ?? 0),
+      upazilaCount: () => BigInt(this.upazilas.size),
       getVoter: (commitment: string) => {
         const voter = this.voters.get(commitment)
         return {
           commitment,
           wallet: voter?.wallet ?? '0x0000000000000000000000000000000000000000',
+          upazilaId: BigInt(voter?.upazilaId ?? 0),
           registeredAt: BigInt(voter?.registeredAt ?? 0),
           revoked: Boolean(voter?.revoked),
+          onHold: Boolean(voter?.onHold),
         }
       },
       isElectionTrustee: (id: number, address: string) =>
@@ -341,14 +406,30 @@ export function fakeRelay(method: string, args: unknown[], sender = '0x000000000
 
   switch (method) {
     case 'registerVoter':
-      chain.registerVoter(String(args[0]), String(args[1]))
+      chain.registerVoter(String(args[0]), String(args[1]), Number(args[2]))
+      break
+    case 'registerUpazila':
+      chain.registerUpazila(Number(args[0]), String(args[1]))
+      break
+    case 'transferVoterArea':
+      chain.transferVoterArea(String(args[0]), Number(args[1]))
+      break
+    case 'setVoterHold':
+      chain.setVoterHold(String(args[0]), Boolean(args[1]))
       break
     case 'revokeVoter':
       chain.revokeVoter(String(args[0]))
       break
     case 'createElection':
       returnValue = BigInt(
-        chain.createElection(String(args[0]), String(args[1]), args[2] as bigint, args[3] as bigint, args[4] as bigint),
+        chain.createElection(
+          String(args[0]),
+          String(args[1]),
+          Number(args[2]),
+          args[3] as bigint,
+          args[4] as bigint,
+          args[5] as bigint,
+        ),
       )
       break
     case 'setElectionKey':

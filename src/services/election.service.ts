@@ -12,6 +12,7 @@
  * out-of-band delivery, and are never written to the database or the logs.
  */
 import { getChainTime, getReadOnlyContract } from '../blockchain/index.js'
+import { assertUpazilaExists, upazilaName, upazilaNames } from './area.service.js'
 import { BALLOT_BASE, env } from '../config/env.js'
 import { generateKeyPair, serialisePublicKey } from '../crypto/paillier.js'
 import { createThresholdSetup, serialiseTrusteeShare } from '../crypto/threshold.js'
@@ -38,6 +39,9 @@ export interface ElectionDto {
   id: number
   name: string
   description: string
+  /** Upazila this election is held in; 0 means national, open to every area. */
+  upazilaId: number
+  upazilaName: string | null
   candidateRegistrationEnd: string
   startTime: string
   endTime: string
@@ -81,11 +85,13 @@ export async function readChainElection(electionId: number): Promise<ChainElecti
   }
 }
 
-function toElectionDto(chain: ChainElection, description: string): ElectionDto {
+function toElectionDto(chain: ChainElection, description: string, areaName: string | null = null): ElectionDto {
   return {
     id: chain.id,
     name: chain.name,
     description,
+    upazilaId: chain.upazilaId,
+    upazilaName: areaName,
     candidateRegistrationEnd: chain.candidateRegistrationEnd.toISOString(),
     startTime: chain.startTime.toISOString(),
     endTime: chain.endTime.toISOString(),
@@ -109,11 +115,14 @@ export async function listElections(): Promise<ElectionDto[]> {
   )
   const cached = await Election.find({ chainElectionId: { $in: chainElections.map((e) => e.id) } })
   const descriptions = new Map(cached.map((row) => [row.chainElectionId, row.description ?? '']))
+  const areaNames = await upazilaNames(chainElections.map((election) => election.upazilaId))
 
   // Refresh the cached status in the background; a stale cache must never block a read.
   void syncStatusCache(chainElections)
 
-  return chainElections.map((chain) => toElectionDto(chain, chain.description || (descriptions.get(chain.id) ?? '')))
+  return chainElections.map((chain) =>
+    toElectionDto(chain, chain.description || (descriptions.get(chain.id) ?? ''), areaNames.get(chain.upazilaId) ?? null),
+  )
 }
 
 async function syncStatusCache(elections: ChainElection[]): Promise<void> {
@@ -188,7 +197,7 @@ export async function getElectionDetail(electionId: number): Promise<ElectionDet
   ])
 
   return {
-    ...toElectionDto(chain, chain.description || (cached?.description ?? '')),
+    ...toElectionDto(chain, chain.description || (cached?.description ?? ''), await upazilaName(chain.upazilaId)),
     candidates,
     publicKey,
   }
@@ -199,6 +208,8 @@ export async function getElectionDetail(electionId: number): Promise<ElectionDet
 export interface CreateElectionInput {
   name: string
   description: string
+  /** Upazila this election is held in. Omit or pass 0 for a national election. */
+  upazilaId?: number
   candidateRegistrationEnd: string
   startTime: string
   endTime: string
@@ -238,6 +249,10 @@ export async function createElection(input: CreateElectionInput, createdBy: stri
     throw ApiError.unprocessable('The threshold cannot exceed the number of trustees.')
   }
 
+  const upazilaId = input.upazilaId ?? 0
+  // Refused here with a readable message rather than as a decoded revert later.
+  await assertUpazilaExists(upazilaId)
+
   const trusteeAddresses = env.TRUSTEE_ADDRESSES.slice(0, input.trusteeCount)
   if (trusteeAddresses.length < input.trusteeCount) {
     throw ApiError.unprocessable(
@@ -252,6 +267,7 @@ export async function createElection(input: CreateElectionInput, createdBy: stri
     [
       input.name,
       input.description,
+      upazilaId,
       dateToSeconds(candidateRegistrationEnd),
       dateToSeconds(startTime),
       dateToSeconds(endTime),
@@ -278,6 +294,7 @@ export async function createElection(input: CreateElectionInput, createdBy: stri
     chainElectionId: electionId,
     name: input.name,
     description: input.description,
+    upazilaId,
     candidateRegistrationEnd,
     startTime,
     endTime,
@@ -319,7 +336,7 @@ export async function createElection(input: CreateElectionInput, createdBy: stri
   // The shares leave this function once, in the response. Nothing logs them, nothing
   // stores them, and `privateKey` goes out of scope here along with the whole key.
   return {
-    ...toElectionDto(chain, input.description),
+    ...toElectionDto(chain, input.description, await upazilaName(upazilaId)),
     trusteeShares: setup.shares.map((share, index) => ({
       address: trusteeAddresses[index],
       shareIndex: share.index,
@@ -351,5 +368,5 @@ export async function transitionElection(electionId: number, transition: Electio
   await Election.updateOne({ chainElectionId: electionId }, { $set: update })
 
   const cached = await Election.findOne({ chainElectionId: electionId })
-  return toElectionDto(chain, chain.description || (cached?.description ?? ''))
+  return toElectionDto(chain, chain.description || (cached?.description ?? ''), await upazilaName(chain.upazilaId))
 }

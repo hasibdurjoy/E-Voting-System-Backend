@@ -50,6 +50,23 @@ const envSchema = z
      */
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
+    /**
+     * Credential-guessing limit, keyed by IP *and* the identifier being tried. Deliberately
+     * small; raising it weakens the protection against an enumeration attack.
+     */
+    AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    /**
+     * Registrations per IP. Several voters legitimately share one address — a household, a
+     * community centre, an assisted-registration desk — so this is looser than the auth
+     * limit, and configurable for deployments where that is common.
+     */
+    REGISTRATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+    /**
+     * Ballots per IP. One voter can only ever cast one ballot per election — the contract
+     * sees to that — so this exists to stop scripted abuse, not double voting, and must
+     * leave room for a shared address or an assisted-voting desk.
+     */
+    VOTE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
 
     // ── auth ──────────────────────────────────────────────────────────────
     JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters').default('dev-only-insecure-jwt-secret-change-me'),

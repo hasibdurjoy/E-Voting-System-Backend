@@ -12,6 +12,8 @@ export interface ChainElection {
   id: number
   name: string
   description: string
+  /** The Upazila this election belongs to; 0 means it is open to every area. */
+  upazilaId: number
   candidateRegistrationEnd: Date
   startTime: Date
   endTime: Date
@@ -35,8 +37,12 @@ export interface ChainCandidate {
 export interface ChainVoter {
   commitment: string
   wallet: string
+  /** The voter's area tag — the eligibility rule, not personal data. */
+  upazilaId: number
   registeredAt: Date
   revoked: boolean
+  /** True while a dispute over this voter's record is unresolved. */
+  onHold: boolean
 }
 
 type Indexed = Record<string | number, unknown>
@@ -60,6 +66,7 @@ export function toChainElection(raw: unknown): ChainElection {
     id: num(r.id),
     name: String(r.name),
     description: String(r.description),
+    upazilaId: num(r.upazilaId),
     candidateRegistrationEnd: secondsToDate(r.candidateRegistrationEnd),
     startTime: secondsToDate(r.startTime),
     endTime: secondsToDate(r.endTime),
@@ -89,8 +96,10 @@ export function toChainVoter(raw: unknown): ChainVoter {
   return {
     commitment: String(r.commitment),
     wallet: String(r.wallet),
+    upazilaId: num(r.upazilaId),
     registeredAt: secondsToDate(r.registeredAt),
     revoked: Boolean(r.revoked),
+    onHold: Boolean(r.onHold),
   }
 }
 

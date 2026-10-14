@@ -24,6 +24,10 @@ const PASSWORD = 'Str0ng#Password'
 
 const TRUSTEE_ADDRESSES = env.TRUSTEE_ADDRESSES
 
+/** Areas the scripted chain knows about; mirrors the mock registry's fixtures. */
+const UPAZILA_A = 101
+const UPAZILA_B = 202
+
 async function createUser(options: {
   nid: string
   email: string
@@ -32,10 +36,12 @@ async function createUser(options: {
   revoked?: boolean
   registerOnChain?: boolean
   fullName?: string
+  upazilaId?: number
 }) {
   const salt = generateCommitmentSalt()
   const commitment = voterCommitment(options.nid, salt)
-  if (options.registerOnChain !== false) fakeChain.registerVoter(commitment, '0x' + '0'.repeat(40))
+  const upazilaId = options.upazilaId ?? UPAZILA_A
+  if (options.registerOnChain !== false) fakeChain.registerVoter(commitment, '0x' + '0'.repeat(40), upazilaId)
 
   const user = await User.create({
     fullName: options.fullName ?? 'Test Person',
@@ -45,6 +51,7 @@ async function createUser(options: {
     commitmentSalt: encryptPii(salt, env.PII_ENCRYPTION_KEY),
     voterCommitment: commitment,
     dateOfBirth: new Date('1990-01-01T00:00:00Z'),
+    upazilaId,
     email: options.email,
     phone: '+8801700000000',
     passwordHash: await hashPassword(PASSWORD),
@@ -297,6 +304,21 @@ describe('login', () => {
     expect(me.status).toBe(200)
     expect(me.body.data.email).toBe('voter@example.test')
     expect(me.body.data.maskedNid).toBe('•••• •••• 6778')
+    // The session endpoint must report the area the same way login does — the UI reads
+    // the voter's Upazila from here, and a null name renders as "Upazila 101".
+    expect(me.body.data.upazilaId).toBe(UPAZILA_A)
+    expect(me.body.data.upazilaName).toBeTruthy()
+    expect(me.body.data.onHold).toBe(false)
+  })
+
+  it('reports the same area from login and from /auth/me', async () => {
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ identifier: 'voter@example.test', password: PASSWORD })
+    const me = await request(app).get('/api/auth/me').set(auth(login.body.data.token))
+
+    expect(me.body.data.upazilaId).toBe(login.body.data.user.upazilaId)
+    expect(me.body.data.upazilaName).toBe(login.body.data.user.upazilaName)
   })
 })
 
@@ -811,5 +833,348 @@ describe('candidate self-service', () => {
     expect(adminsOwn.body.data).toHaveLength(0)
 
     expect(await Candidate.countDocuments({})).toBe(1)
+  })
+})
+
+describe('Upazila scoping', () => {
+  let adminToken: string
+  let localToken: string
+  let outsiderToken: string
+  let electionId: number
+
+  beforeEach(async () => {
+    await createUser({ nid: '1995077788899', email: 'admin@example.test', roles: ['admin'] })
+    await createUser({ nid: '2001045566778', email: 'local@example.test', upazilaId: UPAZILA_A })
+    await createUser({ nid: '1988061122334', email: 'outsider@example.test', upazilaId: UPAZILA_B })
+    adminToken = await tokenFor('admin@example.test')
+    localToken = await tokenFor('local@example.test')
+    outsiderToken = await tokenFor('outsider@example.test')
+
+    const created = await createElection(adminToken, { upazilaId: UPAZILA_A })
+    expect(created.status).toBe(201)
+    electionId = (created.body.data as { id: number }).id
+  })
+
+  it('records the area on the election and reports its name', async () => {
+    const detail = await request(app).get(`/api/elections/${electionId}`)
+    expect(detail.body.data.upazilaId).toBe(UPAZILA_A)
+    // The name comes from the catalogue, so the UI never has to show a bare code.
+    expect(detail.body.data.upazilaName).toBeTypeOf('string')
+  })
+
+  it('refuses an election in an unregistered area', async () => {
+    const response = await createElection(adminToken, { upazilaId: 999 })
+    expect(response.status).toBe(422)
+  })
+
+  it('reports a voter from another Upazila as ineligible, naming both areas', async () => {
+    await request(app)
+      .post(`/api/elections/${electionId}/transition`)
+      .set(auth(adminToken))
+      .send({ transition: 'open-candidate-registration' })
+
+    const eligibility = await request(app)
+      .get(`/api/elections/${electionId}/eligibility`)
+      .set(auth(outsiderToken))
+
+    expect(eligibility.status).toBe(200)
+    expect(eligibility.body.data).toMatchObject({ eligible: false, reason: 'wrong-area' })
+    expect(eligibility.body.data.electionUpazilaName).toBeTruthy()
+    expect(eligibility.body.data.voterUpazilaName).toBeTruthy()
+  })
+
+  it('refuses a candidate application from another Upazila', async () => {
+    await request(app)
+      .post(`/api/elections/${electionId}/transition`)
+      .set(auth(adminToken))
+      .send({ transition: 'open-candidate-registration' })
+
+    const outsider = await request(app)
+      .post(`/api/elections/${electionId}/candidates`)
+      .set(auth(outsiderToken))
+      .send({ electionId, party: 'Elsewhere', manifesto: 'A platform of at least ten characters.' })
+    expect(outsider.status).toBe(403)
+
+    const local = await request(app)
+      .post(`/api/elections/${electionId}/candidates`)
+      .set(auth(localToken))
+      .send({ electionId, party: 'Local', manifesto: 'A platform of at least ten characters.' })
+    expect(local.status).toBe(201)
+  })
+
+  it('refuses a ballot from another Upazila and accepts one from inside it', async () => {
+    await request(app)
+      .post(`/api/elections/${electionId}/transition`)
+      .set(auth(adminToken))
+      .send({ transition: 'open-candidate-registration' })
+    const application = await request(app)
+      .post(`/api/elections/${electionId}/candidates`)
+      .set(auth(localToken))
+      .send({ electionId, party: 'Local', manifesto: 'A platform of at least ten characters.' })
+    await request(app)
+      .patch(`/api/admin/candidates/${(application.body.data as { id: number }).id}`)
+      .set(auth(adminToken))
+      .send({ electionId, status: CandidateStatus.Approved })
+    await request(app)
+      .post(`/api/elections/${electionId}/transition`)
+      .set(auth(adminToken))
+      .send({ transition: 'open-voting' })
+    fakeChain.elections.get(electionId)!.startTime = BigInt(Math.floor(Date.now() / 1000) - 60)
+
+    const outsiderVote = await request(app)
+      .post('/api/votes')
+      .set(auth(outsiderToken))
+      .send({ electionId, ciphertext: ciphertextFor(electionId) })
+    expect(outsiderVote.status).toBe(403)
+    expect(outsiderVote.body.message).toMatch(/Upazila/i)
+
+    const localVote = await request(app)
+      .post('/api/votes')
+      .set(auth(localToken))
+      .send({ electionId, ciphertext: ciphertextFor(electionId) })
+    expect(localVote.status).toBe(201)
+  })
+
+  it('lets a national election admit every area', async () => {
+    const created = await createElection(adminToken, { upazilaId: 0, name: 'National Election' })
+    const nationalId = (created.body.data as { id: number }).id
+    await request(app)
+      .post(`/api/elections/${nationalId}/transition`)
+      .set(auth(adminToken))
+      .send({ transition: 'open-candidate-registration' })
+
+    for (const token of [localToken, outsiderToken]) {
+      const application = await request(app)
+        .post(`/api/elections/${nationalId}/candidates`)
+        .set(auth(token))
+        .send({ electionId: nationalId, party: 'Any', manifesto: 'A platform of at least ten characters.' })
+      expect(application.status).toBe(201)
+    }
+  })
+
+  it('publishes the Upazila catalogue and registers a new area', async () => {
+    const before = await request(app).get('/api/upazilas')
+    expect(before.status).toBe(200)
+
+    const created = await request(app)
+      .post('/api/admin/upazilas')
+      .set(auth(adminToken))
+      .send({ upazilaId: 303, name: 'Nabagram Test Upazila', district: 'Test District' })
+    expect(created.status).toBe(201)
+
+    const duplicate = await request(app)
+      .post('/api/admin/upazilas')
+      .set(auth(adminToken))
+      .send({ upazilaId: 303, name: 'Again' })
+    expect(duplicate.status).toBe(409)
+
+    const asVoter = await request(app)
+      .post('/api/admin/upazilas')
+      .set(auth(localToken))
+      .send({ upazilaId: 404, name: 'Rogue' })
+    expect(asVoter.status).toBe(403)
+  })
+})
+
+describe('area transfer', () => {
+  let adminToken: string
+  let voterToken: string
+
+  beforeEach(async () => {
+    await createUser({ nid: '1995077788899', email: 'admin@example.test', roles: ['admin'] })
+    await createUser({ nid: '2001045566778', email: 'voter@example.test', upazilaId: UPAZILA_A })
+    adminToken = await tokenFor('admin@example.test')
+    voterToken = await tokenFor('voter@example.test')
+  })
+
+  const fileRequest = (token: string, toUpazilaId = UPAZILA_B) =>
+    request(app)
+      .post('/api/transfers')
+      .set(auth(token))
+      .send({ toUpazilaId, evidence: 'Utility bill for the new address, reference 12345.' })
+
+  it('accepts a request, approves it, and moves the voter on-chain', async () => {
+    const filed = await fileRequest(voterToken)
+    expect(filed.status).toBe(201)
+    expect(filed.body.data).toMatchObject({ status: 'pending', fromUpazilaId: UPAZILA_A, toUpazilaId: UPAZILA_B })
+
+    const pending = await request(app).get('/api/admin/transfers').set(auth(adminToken))
+    expect(pending.body.data).toHaveLength(1)
+
+    const decided = await request(app)
+      .post(`/api/admin/transfers/${(filed.body.data as { id: string }).id}/decide`)
+      .set(auth(adminToken))
+      .send({ approve: true })
+
+    expect(decided.status).toBe(200)
+    expect(decided.body.data.status).toBe('approved')
+    expect(decided.body.data.txHash).toMatch(/^0x[0-9a-f]{64}$/)
+
+    // One area at a time: the chain now holds the new tag, not both.
+    const user = await User.findOne({ email: 'voter@example.test' })
+    expect(fakeChain.voters.get(user!.voterCommitment)!.upazilaId).toBe(UPAZILA_B)
+    expect(user!.upazilaId).toBe(UPAZILA_B)
+  })
+
+  it('rejects a request with a reason, leaving the area unchanged', async () => {
+    const filed = await fileRequest(voterToken)
+    const decided = await request(app)
+      .post(`/api/admin/transfers/${(filed.body.data as { id: string }).id}/decide`)
+      .set(auth(adminToken))
+      .send({ approve: false, reason: 'The evidence does not show the new address.' })
+
+    expect(decided.status).toBe(200)
+    expect(decided.body.data.status).toBe('rejected')
+    const user = await User.findOne({ email: 'voter@example.test' })
+    expect(user!.upazilaId).toBe(UPAZILA_A)
+  })
+
+  it('requires a reason to reject, and refuses a second decision', async () => {
+    const filed = await fileRequest(voterToken)
+    const id = (filed.body.data as { id: string }).id
+
+    const noReason = await request(app)
+      .post(`/api/admin/transfers/${id}/decide`)
+      .set(auth(adminToken))
+      .send({ approve: false })
+    expect(noReason.status).toBe(400)
+
+    await request(app).post(`/api/admin/transfers/${id}/decide`).set(auth(adminToken)).send({ approve: true })
+    const again = await request(app)
+      .post(`/api/admin/transfers/${id}/decide`)
+      .set(auth(adminToken))
+      .send({ approve: true })
+    expect(again.status).toBe(409)
+  })
+
+  it('refuses a duplicate request, a move to the same area, and an unknown area', async () => {
+    await fileRequest(voterToken)
+    expect((await fileRequest(voterToken)).status).toBe(409)
+
+    const sameArea = await fileRequest(voterToken, UPAZILA_A)
+    expect(sameArea.status).toBe(409)
+
+    const unknown = await fileRequest(voterToken, 999)
+    expect(unknown.status).toBe(422)
+  })
+
+  it('closes transfers once an election the voter could take part in is under way', async () => {
+    // Candidate registration has closed for an election in the voter's area …
+    const created = await createElection(adminToken, { upazilaId: UPAZILA_A })
+    const electionId = (created.body.data as { id: number }).id
+    fakeChain.elections.get(electionId)!.candidateRegistrationEnd = BigInt(Math.floor(Date.now() / 1000) - 60)
+
+    const filed = await fileRequest(voterToken)
+    expect(filed.status).toBe(409)
+    expect(filed.body.message).toMatch(/in progress/i)
+  })
+
+  it('keeps a voter’s requests private and the queue admin-only', async () => {
+    await fileRequest(voterToken)
+    const mine = await request(app).get('/api/transfers/me').set(auth(voterToken))
+    expect(mine.body.data).toHaveLength(1)
+
+    expect((await request(app).get('/api/admin/transfers').set(auth(voterToken))).status).toBe(403)
+    expect((await request(app).get('/api/transfers/me')).status).toBe(401)
+  })
+})
+
+describe('disputes', () => {
+  let adminToken: string
+  let voterToken: string
+
+  beforeEach(async () => {
+    await createUser({ nid: '1995077788899', email: 'admin@example.test', roles: ['admin'] })
+    await createUser({ nid: '2001045566778', email: 'voter@example.test', upazilaId: UPAZILA_A })
+    adminToken = await tokenFor('admin@example.test')
+    voterToken = await tokenFor('voter@example.test')
+  })
+
+  const raise = (token: string, body: Record<string, unknown> = {}) =>
+    request(app)
+      .post('/api/disputes')
+      .set(auth(token))
+      .send({ category: 'wrong-area', detail: 'My record shows the wrong Upazila entirely.', ...body })
+
+  it('suspends the voter on-chain while the dispute is open', async () => {
+    const raised = await raise(voterToken)
+    expect(raised.status).toBe(201)
+    expect(raised.body.data.status).toBe('open')
+    expect(raised.body.data.holdTxHash).toMatch(/^0x[0-9a-f]{64}$/)
+
+    const user = await User.findOne({ email: 'voter@example.test' })
+    expect(user!.onHold).toBe(true)
+    expect(fakeChain.voters.get(user!.voterCommitment)!.onHold).toBe(true)
+    // The on-chain registration check now refuses them, which is what blocks a ballot.
+    expect(fakeChain.isRegisteredVoter(user!.voterCommitment)).toBe(false)
+  })
+
+  it('reports an on-hold voter as ineligible rather than unregistered', async () => {
+    const created = await createElection(adminToken, { upazilaId: UPAZILA_A })
+    const electionId = (created.body.data as { id: number }).id
+    await raise(voterToken)
+
+    const eligibility = await request(app)
+      .get(`/api/elections/${electionId}/eligibility`)
+      .set(auth(voterToken))
+    expect(eligibility.body.data.reason).toBe('account-on-hold')
+  })
+
+  it('resolves a dispute, corrects the area, and restores eligibility', async () => {
+    const raised = await raise(voterToken)
+    const resolved = await request(app)
+      .post(`/api/admin/disputes/${(raised.body.data as { id: string }).id}/resolve`)
+      .set(auth(adminToken))
+      .send({
+        outcome: 'upheld',
+        resolution: 'Registry address confirmed; area corrected.',
+        correctedUpazilaId: UPAZILA_B,
+      })
+
+    expect(resolved.status).toBe(200)
+    expect(resolved.body.data.status).toBe('upheld')
+
+    const user = await User.findOne({ email: 'voter@example.test' })
+    expect(user!.onHold).toBe(false)
+    expect(user!.upazilaId).toBe(UPAZILA_B)
+    expect(fakeChain.voters.get(user!.voterCommitment)!.onHold).toBe(false)
+    expect(fakeChain.voters.get(user!.voterCommitment)!.upazilaId).toBe(UPAZILA_B)
+  })
+
+  it('rejects a dispute without changing the record', async () => {
+    const raised = await raise(voterToken)
+    const resolved = await request(app)
+      .post(`/api/admin/disputes/${(raised.body.data as { id: string }).id}/resolve`)
+      .set(auth(adminToken))
+      .send({ outcome: 'rejected', resolution: 'The registry record is correct.' })
+
+    expect(resolved.body.data.status).toBe('rejected')
+    const user = await User.findOne({ email: 'voter@example.test' })
+    expect(user!.onHold).toBe(false)
+    expect(user!.upazilaId).toBe(UPAZILA_A)
+  })
+
+  it('refuses a second open dispute and a resolution of a closed one', async () => {
+    const raised = await raise(voterToken)
+    expect((await raise(voterToken)).status).toBe(409)
+
+    const id = (raised.body.data as { id: string }).id
+    await request(app)
+      .post(`/api/admin/disputes/${id}/resolve`)
+      .set(auth(adminToken))
+      .send({ outcome: 'rejected', resolution: 'Record is correct.' })
+
+    const again = await request(app)
+      .post(`/api/admin/disputes/${id}/resolve`)
+      .set(auth(adminToken))
+      .send({ outcome: 'rejected', resolution: 'Again.' })
+    expect(again.status).toBe(409)
+  })
+
+  it('keeps the queue admin-only and a voter’s own disputes private', async () => {
+    await raise(voterToken)
+    expect((await request(app).get('/api/disputes/me').set(auth(voterToken))).body.data).toHaveLength(1)
+    expect((await request(app).get('/api/admin/disputes').set(auth(voterToken))).status).toBe(403)
+    expect((await request(app).get('/api/admin/disputes').set(auth(adminToken))).body.data).toHaveLength(1)
   })
 })

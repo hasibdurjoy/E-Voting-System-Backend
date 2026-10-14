@@ -1,7 +1,7 @@
 # Integration Guide — Backend
 
 **Audience:** whoever works on the backend.
-**Status:** ✅ **Implemented.** 65 tests passing, every endpoint live, no route returns `501`.
+**Status:** ✅ **Implemented.** 85 tests passing, every endpoint live, no route returns `501`.
 
 This document was the build spec and is now the reference for what was built. Where the
 implementation made a decision the spec left open, the decision is recorded here in place of the
@@ -397,12 +397,11 @@ national database requires extensive permissions, so the mock is the expected st
 It must **never contain real citizen data**; use obviously synthetic records. The frontend's demo
 registration page already lists the fixtures it expects:
 
-```
-2001045566778  Sadia Noor    2001-04-05   → succeeds
-1999012233445  Rakib Hasan   1999-01-22   → succeeds
-1990123456789  Ayesha Rahman 1990-04-12   → already registered (409)
-2010099887766  Minor Person  2010-09-09   → under voting age (422)
-```
+The canonical fixture list — 10 registerable records plus the deliberate failure cases — is
+[`../e-voting-system-frontend/TEST-ACCOUNTS.md`](../e-voting-system-frontend/TEST-ACCOUNTS.md),
+generated from `mock.data.ts`. **Mirror it exactly**, so the same National ID behaves identically
+whether the frontend is running against the mock or against you. Each record must reproduce its
+status code: `404` unknown, `422` mismatch or under age, `409` already registered.
 
 **`MockFaceProvider`** — returns a configurable score, fails on implausibly small payloads, and
 simulates a liveness check. **To replace in production:** swap for a real provider, keep the
@@ -545,6 +544,34 @@ shown to the applicant.
 
 **Do not log the ciphertext alongside the user id.** Together they are the voter→ballot link the
 whole design exists to prevent. Log the hash if you must log anything.
+
+### Areas, transfers and disputes
+
+The Upazila workflow: a voter belongs to exactly one area, may only take part in elections
+for it, may ask to be moved, and may dispute a record they believe is wrong.
+
+| Method | Path | Auth | Request → Response |
+| --- | --- | --- | --- |
+| GET | `/api/upazilas` | — | → `Upazila[]` — the public catalogue |
+| POST | `/api/transfers` | voter | `{ toUpazilaId, evidence }` → `AreaTransferRequest` |
+| GET | `/api/transfers/me` | voter | → `AreaTransferRequest[]` |
+| POST | `/api/disputes` | voter | `{ category, detail }` → `Dispute` — **suspends eligibility** |
+| GET | `/api/disputes/me` | voter | → `Dispute[]` |
+| POST | `/api/admin/upazilas` | **admin** | `{ upazilaId, name, district? }` → `Upazila` |
+| GET | `/api/admin/transfers` | **admin** | → `AreaTransferRequest[]` (pending) |
+| POST | `/api/admin/transfers/:id/decide` | **admin** | `{ approve, reason? }` → `AreaTransferRequest` |
+| GET | `/api/admin/disputes` | **admin** | → `Dispute[]` (open) |
+| POST | `/api/admin/disputes/:id/resolve` | **admin** | `{ outcome, resolution, correctedUpazilaId? }` → `Dispute` |
+
+`EligibilityResult.reason` gains **`wrong-area`** and **`account-on-hold`**; when the reason
+is `wrong-area` the response also carries `voterUpazilaName` and `electionUpazilaName` so the
+UI can name both.
+
+**The transfer cutoff lives here, not in the contract.** A transfer is refused once an
+election the voter could take part in has passed its candidate-registration deadline and has
+not yet closed. Enforcing it on-chain would mean iterating every election on every transfer;
+the backend already knows the schedule. It is re-checked at decision time, because an
+election may have opened since the request was filed.
 
 ### Admin
 

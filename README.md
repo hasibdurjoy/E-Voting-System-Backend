@@ -4,7 +4,7 @@ REST API for the blockchain-based E-Voting System (MCSE project, Bangladesh Univ
 It holds voter identity off-chain in MongoDB, relays every on-chain action through a single signer,
 and opens election results with threshold cryptography it cannot perform alone.
 
-**Status:** implemented. 65 tests passing, plus a 20-step end-to-end scenario (`yarn e2e`) that runs
+**Status:** implemented. 85 tests passing, plus an end-to-end scenario (`yarn e2e`) that runs
 against the real contract and the real database.
 
 ---
@@ -134,6 +134,9 @@ The full reference is in [INTEGRATION.md](INTEGRATION.md) §11.
 | Candidates | `POST /api/elections/:id/candidates`, `GET /api/candidates/me`, `PATCH /api/admin/candidates/:id` |
 | Voting | `POST /api/votes`, `GET /api/votes/me` |
 | Admin | `GET /api/admin/stats`, `GET /api/admin/voters`, `POST /api/admin/voters/:id/revoke`, `POST /api/admin/elections/:id/publish-result` |
+| Areas | `GET /api/upazilas`, `POST /api/admin/upazilas` |
+| Transfers | `POST /api/transfers`, `GET /api/transfers/me`, `GET /api/admin/transfers`, `POST /api/admin/transfers/:id/decide` |
+| Disputes | `POST /api/disputes`, `GET /api/disputes/me`, `GET /api/admin/disputes`, `POST /api/admin/disputes/:id/resolve` |
 | Trustee | `GET /api/trustee/elections`, `GET /api/trustee/elections/:id/tally`, `POST /api/trustee/elections/:id/share` |
 | Ops | `GET /api/health`, `GET /api/blockchain/status` |
 
@@ -142,6 +145,24 @@ registered, already voted), `410` (expired registration session), `422` (age or 
 `428` (a step that must happen elsewhere first).
 
 ---
+
+## Upazila scoping
+
+A voter belongs to exactly one Upazila, resolved from their National ID record by a
+validator — never chosen by the voter. An election carries an area too (`0` = national), and
+only voters tagged with it may stand or vote.
+
+The proposal asks the contract to reject a vote for a candidate from another area. It cannot:
+the ballot is encrypted and the contract never learns the choice. The same guarantee is
+enforced one step earlier — candidates may only register for an election in their own
+Upazila — so an out-of-area candidate is never on that ballot.
+
+| Workflow | How it works |
+| --- | --- |
+| **Transfer** | The voter asks, a validator decides, and the on-chain tag is *replaced* — never held twice. The previous area stays in `VoterAreaChanged`. |
+| **Transfer cutoff** | Refused once an election the voter could join has passed its candidate-registration deadline and not yet closed. Enforced here, where the schedule is known, and re-checked at decision time. |
+| **Dispute** | Raising one suspends eligibility on-chain (`setVoterHold`), so the contract itself refuses the ballot. Resolving it can correct the area and releases the hold. |
+| **Privacy** | The area lives on the voter record, never beside a ballot: pairing an area with a ciphertext would shrink the anonymity set in a small Upazila. The dispute text stays off-chain; only a hash is anchored. |
 
 ## Cryptography
 
@@ -203,7 +224,8 @@ tests/             Vitest suites, with a scripted stand-in for the chain
 ## Testing
 
 ```bash
-yarn test     # 65 tests: crypto, auth, authorisation, elections, candidates, voting, trustees
+yarn test     # 85 tests: crypto, auth, authorisation, elections, candidates, voting,
+              #           trustees, Upazila scoping, transfers and disputes
 yarn e2e      # the full scenario against a live chain — see INTEGRATION.md §4
 ```
 

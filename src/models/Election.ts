@@ -10,6 +10,8 @@ const electionSchema = new Schema(
     chainElectionId: { type: Number, required: true, unique: true, index: true },
     name: { type: String, required: true },
     description: { type: String, default: '' },
+    /** Upazila this election is held in; 0 means national, open to every area. */
+    upazilaId: { type: Number, default: 0, index: true },
 
     candidateRegistrationEnd: { type: Date, required: true },
     startTime: { type: Date, required: true },

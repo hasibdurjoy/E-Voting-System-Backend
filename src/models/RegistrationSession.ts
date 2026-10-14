@@ -12,6 +12,8 @@ const registrationSessionSchema = new Schema({
   nidLookupHash: { type: String, required: true, index: true, select: false },
   fullName: { type: String, required: true },
   dateOfBirth: { type: Date, required: true },
+  /** Resolved from the registry address during the NID step. */
+  upazilaId: { type: Number, required: true },
 
   nidVerified: { type: Boolean, default: false },
   faceVerified: { type: Boolean, default: false },

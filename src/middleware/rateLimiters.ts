@@ -7,7 +7,7 @@
  */
 import { rateLimit, type Options } from 'express-rate-limit'
 import type { Request } from 'express'
-import { isTest } from '../config/env.js'
+import { env, isTest } from '../config/env.js'
 
 const message = { success: false, message: 'Too many attempts. Please wait a few minutes and try again.' }
 
@@ -33,8 +33,8 @@ function identifierKey(field: string) {
   }
 }
 
-export const loginLimiter = limiter({ limit: 5, keyGenerator: identifierKey('identifier') })
-export const nidVerificationLimiter = limiter({ limit: 5, keyGenerator: identifierKey('nid') })
-export const registrationLimiter = limiter({ limit: 10 })
+export const loginLimiter = limiter({ limit: env.AUTH_RATE_LIMIT_MAX, keyGenerator: identifierKey('identifier') })
+export const nidVerificationLimiter = limiter({ limit: env.AUTH_RATE_LIMIT_MAX, keyGenerator: identifierKey('nid') })
+export const registrationLimiter = limiter({ limit: env.REGISTRATION_RATE_LIMIT_MAX })
 /** Voting is one-shot per election, so this only needs to stop scripted abuse. */
-export const voteLimiter = limiter({ limit: 20 })
+export const voteLimiter = limiter({ limit: env.VOTE_RATE_LIMIT_MAX })

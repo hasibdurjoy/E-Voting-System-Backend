@@ -20,6 +20,7 @@ import type { AuthenticatedUser } from '../middleware/auth.js'
 import { Election, VoteReceipt } from '../models/index.js'
 import type { IneligibilityReason } from '../types/domain.js'
 import { ApiError } from '../utils/ApiError.js'
+import { upazilaName } from './area.service.js'
 import { readChainElection } from './election.service.js'
 import { relay } from './relayer.service.js'
 
@@ -38,6 +39,9 @@ export interface EligibilityResultDto {
   reason: IneligibilityReason | null
   hasVoted: boolean
   receipt: VoteReceiptDto | null
+  /** Present when the reason is `wrong-area`, so the UI can name both areas. */
+  voterUpazilaName?: string | null
+  electionUpazilaName?: string | null
 }
 
 interface ReceiptRow {
@@ -90,9 +94,23 @@ export async function checkEligibility(
   const receipt = existing ? toReceiptDto(existing) : null
 
   if (user.revoked) return { eligible: false, reason: 'account-revoked', hasVoted: hasVotedOnChain, receipt }
+  if (user.onHold) return { eligible: false, reason: 'account-on-hold', hasVoted: hasVotedOnChain, receipt }
 
   const registered = (await contract.isRegisteredVoter(user.voterCommitment)) as boolean
   if (!registered) return { eligible: false, reason: 'not-registered', hasVoted: hasVotedOnChain, receipt }
+
+  // The area rule, checked the same way the contract checks it: a national election
+  // (area 0) admits everyone, otherwise the voter's tag must match exactly.
+  if (chain.upazilaId !== 0 && chain.upazilaId !== (user.upazilaId ?? 0)) {
+    return {
+      eligible: false,
+      reason: 'wrong-area',
+      hasVoted: hasVotedOnChain,
+      receipt,
+      voterUpazilaName: await upazilaName(user.upazilaId ?? 0),
+      electionUpazilaName: await upazilaName(chain.upazilaId),
+    }
+  }
 
   if (hasVotedOnChain) return { eligible: false, reason: 'already-voted', hasVoted: true, receipt }
 
@@ -122,6 +140,12 @@ export async function castVote(user: AuthenticatedUser, input: CastVoteInput): P
         throw ApiError.forbidden('This account has been suspended. Contact the Election Commission.')
       case 'not-registered':
         throw ApiError.forbidden('This account is not registered to vote.')
+      case 'account-on-hold':
+        throw ApiError.forbidden('Your registration is on hold while a dispute about your record is reviewed.')
+      case 'wrong-area':
+        throw ApiError.forbidden(
+          `This election is held in ${eligibility.electionUpazilaName ?? 'another Upazila'}, and you are registered to vote in ${eligibility.voterUpazilaName ?? 'a different area'}.`,
+        )
       default:
         throw ApiError.conflict('This election is not currently open for voting.')
     }

@@ -16,8 +16,9 @@ import { env, isProduction } from '../config/env.js'
 import { generateCommitmentSalt, maskNid, nidLookupHash, voterCommitment } from '../crypto/commitment.js'
 import { encryptPii } from '../crypto/pii.js'
 import { User } from '../models/index.js'
-import { MOCK_NID_FIXTURES } from '../providers/mock.nid.provider.js'
+import { DEMO_UPAZILAS, MOCK_NID_FIXTURES } from '../providers/mock.nid.provider.js'
 import { hashPassword } from '../services/auth.service.js'
+import { ensureUpazila } from '../services/area.service.js'
 import { relay } from '../services/relayer.service.js'
 import { logger } from '../utils/logger.js'
 
@@ -50,11 +51,13 @@ async function seedAccount(account: SeedAccount): Promise<void> {
   const commitment = voterCommitment(account.nid, salt)
 
   if (account.registerOnChain) {
-    await relay('seed:registerVoter', 'registerVoter', [commitment, ZeroAddress])
+    // The area goes on-chain with the registration: it is the eligibility rule.
+    await relay('seed:registerVoter', 'registerVoter', [commitment, ZeroAddress, fixture.upazilaId])
   }
 
   await User.create({
     fullName: fixture.fullName,
+    upazilaId: fixture.upazilaId,
     nidEncrypted: encryptPii(account.nid, env.PII_ENCRYPTION_KEY),
     nidLookupHash: nidLookupHash(account.nid, env.NID_HMAC_PEPPER),
     nidMasked: maskNid(account.nid),
@@ -76,6 +79,16 @@ async function main(): Promise<void> {
   if (isProduction) throw new Error('seed:demo refuses to run with NODE_ENV=production')
 
   await connectDatabase(env.MONGODB_URI)
+
+  // Areas first: a voter cannot be registered into an Upazila that does not exist.
+  for (const area of DEMO_UPAZILAS) {
+    const { created } = await ensureUpazila({
+      upazilaId: area.upazilaId,
+      name: area.name,
+      district: area.district,
+    })
+    logger.info(`Upazila ${area.upazilaId} — ${area.name} ${created ? 'registered' : 'already on-chain'}`)
+  }
 
   const trusteeNids = ['1988061122334', '1992033344556', '1985091122445']
 

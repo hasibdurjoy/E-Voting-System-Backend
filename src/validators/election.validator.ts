@@ -9,6 +9,8 @@ export const electionIdParam = z.object({
 
 export const createElectionSchema = z.object({
   name: z.string().trim().min(3).max(200),
+  /** 0 (or omitted) means a national election open to every Upazila. */
+  upazilaId: z.coerce.number().int().nonnegative().default(0),
   description: z.string().trim().max(2000).default(''),
   candidateRegistrationEnd: isoDate,
   startTime: isoDate,
