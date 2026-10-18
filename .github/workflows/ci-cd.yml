@@ -127,34 +127,16 @@ jobs:
     #
     #   Required secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD,
     #                     BLOCKCHAIN_RPC_URL, BACKEND_PRIVATE_KEY
-    #   Optional:         API_DOMAIN, CORS_ORIGIN, CERTBOT_EMAIL, APP_PORT, DEPLOY_PATH,
+    #   Optional:         API_DOMAIN (for the outside health check), CORS_ORIGIN, APP_PORT, DEPLOY_PATH,
     #                     CONTRACT_ADDRESS, BLOCKCHAIN_START_BLOCK, TRUSTEE_ADDRESSES
+    #
+    # The reverse proxy is Caddy, configured by hand on the server; the deploy only reloads it.
     env:
+      API_DOMAIN: ${{ vars.API_DOMAIN || secrets.API_DOMAIN }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'e-voting-backend' }}
 
     steps:
       - uses: actions/checkout@v5
-
-      - name: Resolve the API domain
-        id: domain
-        env:
-          API_DOMAIN: ${{ vars.API_DOMAIN || secrets.API_DOMAIN }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-        # Without a domain of its own the server gets one from sslip.io, which resolves
-        # api.1-2-3-4.sslip.io to 1.2.3.4 with no DNS setup — enough for a certificate.
-        run: |
-          if [ -z "$DEPLOY_HOST" ]; then
-            echo "::error::Set the DEPLOY_HOST secret (the server's IP address)."; exit 1
-          fi
-          if [ -z "$API_DOMAIN" ]; then
-            if [[ "$DEPLOY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              API_DOMAIN="api.${DEPLOY_HOST//./-}.sslip.io"
-            else
-              API_DOMAIN="$DEPLOY_HOST"
-            fi
-          fi
-          echo "name=$API_DOMAIN" >> "$GITHUB_OUTPUT"
-          echo "API will be served at https://$API_DOMAIN/api" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Copy the compose file and server scripts
         uses: appleboy/scp-action@v0.1.7
@@ -173,9 +155,7 @@ jobs:
           BACKEND_IMAGE: ${{ env.IMAGE_NAME }}
           GHCR_USER: ${{ github.actor }}
           GHCR_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          API_DOMAIN: ${{ steps.domain.outputs.name }}
           CORS_ORIGIN: ${{ vars.CORS_ORIGIN || secrets.CORS_ORIGIN }}
-          CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL || secrets.CERTBOT_EMAIL }}
           APP_PORT: ${{ vars.APP_PORT || secrets.APP_PORT || '5000' }}
           BLOCKCHAIN_RPC_URL: ${{ secrets.BLOCKCHAIN_RPC_URL }}
           BACKEND_PRIVATE_KEY: ${{ secrets.BACKEND_PRIVATE_KEY }}
@@ -188,7 +168,7 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           command_timeout: 20m
-          envs: IMAGE_TAG,BACKEND_IMAGE,GHCR_USER,GHCR_PASSWORD,API_DOMAIN,CORS_ORIGIN,CERTBOT_EMAIL,APP_PORT,BLOCKCHAIN_RPC_URL,BACKEND_PRIVATE_KEY,CONTRACT_ADDRESS,BLOCKCHAIN_START_BLOCK,TRUSTEE_ADDRESSES
+          envs: IMAGE_TAG,BACKEND_IMAGE,GHCR_USER,GHCR_PASSWORD,CORS_ORIGIN,APP_PORT,BLOCKCHAIN_RPC_URL,BACKEND_PRIVATE_KEY,CONTRACT_ADDRESS,BLOCKCHAIN_START_BLOCK,TRUSTEE_ADDRESSES
           script: |
             set -euo pipefail
             cd "${{ env.DEPLOY_PATH }}"
@@ -197,9 +177,11 @@ jobs:
             bash deploy-docker.sh "$IMAGE_TAG"
 
       - name: Verify the service is answering from outside
-        # A container reporting healthy internally can still be unreachable through nginx.
+        # A container reporting healthy internally can still be unreachable through Caddy.
+        # Skipped until API_DOMAIN is set to the domain in the Caddyfile.
+        if: env.API_DOMAIN != ''
         env:
-          HEALTH_URL: https://${{ steps.domain.outputs.name }}/api/health
+          HEALTH_URL: https://${{ env.API_DOMAIN }}/api/health
         run: |
           for attempt in $(seq 1 10); do
             if curl -fsS --max-time 10 "$HEALTH_URL" | grep -q '"success":true'; then
@@ -209,5 +191,5 @@ jobs:
             echo "Attempt $attempt failed; retrying in 5s"
             sleep 5
           done
-          echo "::error::$HEALTH_URL did not answer. If the deploy log shows a certificate warning, check DNS for the domain."
+          echo "::error::$HEALTH_URL did not answer. Check the Caddyfile proxies to 127.0.0.1:<APP_PORT> and DNS points at the server."
           exit 1

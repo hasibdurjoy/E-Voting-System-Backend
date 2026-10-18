@@ -82,4 +82,15 @@ fi
 # Keep the last few images; drop the rest so the droplet's disk does not fill up.
 $DOCKER image prune -f --filter 'until=168h' >/dev/null 2>&1 || true
 
+# The Caddyfile is maintained by hand on the server (reverse_proxy to 127.0.0.1:$PORT);
+# reloading picks up any edit to it. A graceful reload keeps the previous config live if
+# the new one is invalid, so this never takes the site down.
+if command -v caddy >/dev/null 2>&1; then
+  if [[ $EUID -eq 0 ]]; then SUDO=''; else SUDO='sudo -n'; fi
+  echo "Reloading Caddy"
+  $SUDO systemctl reload caddy || $SUDO systemctl restart caddy
+else
+  echo "WARNING: Caddy is not installed — the backend is running but not reachable from outside." >&2
+fi
+
 echo "Deployed $NEW_TAG successfully"
