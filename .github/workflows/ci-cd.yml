@@ -125,7 +125,7 @@ jobs:
     # Each setting is read from a variable or a secret of that name (Settings → Environments
     # → production), falling back to the default shown.
     #
-    #   Required secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (or DEPLOY_PASSWORD),
+    #   Required secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD,
     #                     BLOCKCHAIN_RPC_URL, BACKEND_PRIVATE_KEY
     #   Optional:         API_DOMAIN, CORS_ORIGIN, CERTBOT_EMAIL, APP_PORT, DEPLOY_PATH,
     #                     CONTRACT_ADDRESS, BLOCKCHAIN_START_BLOCK, TRUSTEE_ADDRESSES
@@ -161,7 +161,6 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           source: 'docker-compose.yml,scripts/deploy-docker.sh,scripts/provision.sh'
@@ -186,7 +185,6 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           command_timeout: 20m
