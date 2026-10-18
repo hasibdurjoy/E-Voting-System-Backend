@@ -16,8 +16,8 @@
  * rather than pretending to do the work.
  */
 import { keccak256 } from 'ethers'
-import { getReadOnlyContract } from '../blockchain/index.js'
-import { BALLOT_BASE } from '../config/env.js'
+import { getProvider, getReadOnlyContract } from '../blockchain/index.js'
+import { BALLOT_BASE, env } from '../config/env.js'
 import type { AuthenticatedUser } from '../middleware/auth.js'
 import { DecryptionSession, Election, Trustee } from '../models/index.js'
 import { ApiError } from '../utils/ApiError.js'
@@ -84,13 +84,28 @@ export async function listTrusteeElections(user: AuthenticatedUser): Promise<Tru
   return results
 }
 
+/** How far back to look for a share the trustee just submitted before giving up. */
+const SHARE_LOOKBACK_BLOCKS = 5000
+
 /** Locates the trustee's own submission transaction. Absent is not fatal — it is cosmetic. */
 async function findShareTxHash(electionId: number, address: string): Promise<string> {
   try {
+    // The event listener usually has it already.
+    const membership = await Trustee.findOne({ chainElectionId: electionId, address })
+    if (membership?.shareTxHash) return membership.shareTxHash
+
+    // Otherwise walk back from the head: the submission is recent, so it is found in the first
+    // few ranges rather than after scanning the whole chain in RPC-sized pieces.
     const contract = getReadOnlyContract()
     const filter = contract.filters.DecryptionShareSubmitted(electionId, address)
-    const events = await contract.queryFilter(filter, 0, 'latest')
-    return events.at(-1)?.transactionHash ?? ''
+    const head = await getProvider().getBlockNumber()
+    const floor = Math.max(env.BLOCKCHAIN_START_BLOCK, head - SHARE_LOOKBACK_BLOCKS)
+    for (let end = head; end >= floor; end -= env.LOG_BLOCK_RANGE) {
+      const start = Math.max(floor, end - env.LOG_BLOCK_RANGE + 1)
+      const events = await contract.queryFilter(filter, start, end)
+      if (events.length > 0) return events.at(-1)!.transactionHash
+    }
+    return ''
   } catch {
     return ''
   }

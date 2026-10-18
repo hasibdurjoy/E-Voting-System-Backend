@@ -9,18 +9,34 @@
  * permanently one approval behind reality.
  */
 import type { Contract, Log } from 'ethers'
-import { getProvider, getReadOnlyContract, isContractConfigured, isProviderConfigured } from '../blockchain/index.js'
+import {
+  getProvider,
+  getReadOnlyContract,
+  isContractConfigured,
+  isProviderConfigured,
+  queryFilterChunked,
+} from '../blockchain/index.js'
 import { env } from '../config/env.js'
 import { Candidate, DecryptionSession, Election, EventCursor, Trustee, Upazila, User, VoteReceipt } from '../models/index.js'
 import { ElectionStatus } from '../types/domain.js'
 import { logger } from '../utils/logger.js'
 
-const CURSOR_NAME = 'voting-registry'
+/** Blocks to process per poll, so catching up after downtime cannot stall one tick for minutes. */
+const MAX_BLOCKS_PER_TICK = 500
 /** Blocks to re-scan on startup, so a reorg near the tip cannot strand an event. */
 const REPLAY_SAFETY_MARGIN = 5
 
 let started = false
+let ticking = false
 let pollTimer: NodeJS.Timeout | null = null
+
+/**
+ * One cursor per contract. A redeploy — or a switch from Hardhat to Sepolia — gets a fresh
+ * cursor instead of inheriting a block number that means nothing on the new chain.
+ */
+function cursorName(): string {
+  return `voting-registry:${(env.CONTRACT_ADDRESS ?? '').toLowerCase()}`
+}
 
 type EventArgs = Record<string, unknown> & { [index: number]: unknown }
 
@@ -118,13 +134,13 @@ const HANDLERS: Record<string, (args: EventArgs, log: Log) => Promise<void>> = {
 }
 
 async function readCursor(): Promise<number> {
-  const cursor = await EventCursor.findOne({ name: CURSOR_NAME })
+  const cursor = await EventCursor.findOne({ name: cursorName() })
   return cursor?.lastProcessedBlock ?? 0
 }
 
 async function writeCursor(block: number): Promise<void> {
   await EventCursor.updateOne(
-    { name: CURSOR_NAME },
+    { name: cursorName() },
     { $set: { lastProcessedBlock: block, updatedAt: new Date() } },
     { upsert: true },
   )
@@ -133,7 +149,7 @@ async function writeCursor(block: number): Promise<void> {
 async function processRange(contract: Contract, fromBlock: number, toBlock: number): Promise<void> {
   if (fromBlock > toBlock) return
 
-  const logs = await contract.queryFilter('*', fromBlock, toBlock)
+  const logs = await queryFilterChunked(contract, '*', fromBlock, toBlock)
   for (const log of logs) {
     const parsed = contract.interface.parseLog({ topics: [...log.topics], data: log.data })
     if (!parsed) continue
@@ -169,18 +185,24 @@ export function startEventListener(intervalMs = 4000): void {
   const contract = getReadOnlyContract()
 
   const tick = async () => {
+    // A slow catch-up must not overlap the next interval and process the same range twice.
+    if (ticking) return
+    ticking = true
     try {
       const head = await getProvider().getBlockNumber()
       const confirmed = head - (env.CONFIRMATIONS - 1)
       if (confirmed < 0) return
 
       const cursor = await readCursor()
-      const from = cursor === 0 ? 0 : Math.max(0, cursor + 1 - REPLAY_SAFETY_MARGIN)
+      const resumeFrom = cursor === 0 ? 0 : cursor + 1 - REPLAY_SAFETY_MARGIN
+      const from = Math.max(env.BLOCKCHAIN_START_BLOCK, resumeFrom)
       if (from > confirmed) return
 
-      await processRange(contract, from, confirmed)
+      await processRange(contract, from, Math.min(confirmed, from + MAX_BLOCKS_PER_TICK - 1))
     } catch (error) {
       logger.debug(`Event poll failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      ticking = false
     }
   }
 

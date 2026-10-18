@@ -1,0 +1,58 @@
+# Production stack for the VPS.
+#
+#   docker compose pull && docker compose up -d
+#
+# Secrets are NOT in this file. They live in .env beside it, written on the server by
+# hand and never passed through CI.
+
+name: evoting
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    # No `ports:` on purpose — MongoDB is reachable only from the compose network, never
+    # from the internet. An exposed, unauthenticated Mongo is found by scanners in hours.
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.runCommand({ping:1}).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  backend:
+    # Built and pushed by CI; IMAGE_TAG is the commit SHA, so a deployment is immutable
+    # and a rollback is just the previous tag.
+    image: ${BACKEND_IMAGE:-ghcr.io/OWNER/e-voting-system-backend}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+
+    # One replica, deliberately. The relayer serialises transactions and tracks the
+    # signer's nonce in process; a second replica using the same key would pick the same
+    # nonce and one transaction would be dropped silently. Scaling out needs a shared
+    # nonce lock first.
+    deploy:
+      replicas: 1
+
+    env_file:
+      - .env
+
+    # Bound to loopback: nginx (or Caddy) terminates TLS and proxies to it. Without the
+    # 127.0.0.1 prefix Docker would publish the port to the world and bypass the firewall.
+    ports:
+      - '127.0.0.1:${PORT:-5000}:${PORT:-5000}'
+
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+    logging: *logging
+
+volumes:
+  mongo-data:

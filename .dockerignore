@@ -1,0 +1,20 @@
+# Build context hygiene: keep secrets and local state out of the image entirely.
+.env
+.env.*
+!.env.example
+
+node_modules
+dist
+logs
+coverage
+*.tsbuildinfo
+
+.git
+.github
+.yarn/cache
+.yarn/install-state.gz
+
+# Not needed at runtime, and they change on every commit — excluding them keeps the
+# Docker layer cache useful.
+tests
+*.md

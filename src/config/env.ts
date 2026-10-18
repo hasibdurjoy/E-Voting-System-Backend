@@ -43,6 +43,10 @@ const envSchema = z
     RELAYER_MIN_BALANCE_ETH: z.coerce.number().nonnegative().default(0.05),
     /** Confirmations before a receipt is treated as final. 1 is fine locally, not on a public chain. */
     CONFIRMATIONS: z.coerce.number().int().positive().default(1),
+    /** The contract's deployment block. Nothing before it can hold an event, so scans start here. */
+    BLOCKCHAIN_START_BLOCK: z.coerce.number().int().nonnegative().default(0),
+    /** Widest eth_getLogs range the RPC accepts. Alchemy's free tier allows 10; a local node, anything. */
+    LOG_BLOCK_RANGE: z.coerce.number().int().positive().default(2000),
 
     /**
      * Global API rate limit. The default is deliberately strict; raise it for a load test
