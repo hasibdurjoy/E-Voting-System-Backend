@@ -7,8 +7,7 @@
 # Deployments are immutable: the tag is a commit SHA, so rolling back means starting the
 # previous tag again. The previous tag is recorded before anything changes.
 #
-# It never writes .env — the relayer key, JWT secret and NID pepper are managed on the
-# server and never travel through CI.
+# .env is written beforehand by provision.sh.
 
 set -euo pipefail
 
@@ -23,6 +22,15 @@ cd "$(dirname "$0")"
 if [[ ! -f .env ]]; then
   echo "No .env on the server — refusing to deploy a backend that cannot start." >&2
   exit 1
+fi
+
+# Docker may have been installed moments ago by provision.sh, before this login session
+# picked up the docker group.
+if docker info >/dev/null 2>&1; then DOCKER=docker; else DOCKER='sudo -n --preserve-env=IMAGE_TAG docker'; fi
+
+# GHCR credentials are the workflow's own short-lived token, so no personal token is needed.
+if [[ -n "${GHCR_PASSWORD:-}" ]]; then
+  echo "$GHCR_PASSWORD" | $DOCKER login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null
 fi
 
 PREVIOUS_TAG="$(cat .current-tag 2>/dev/null || echo '')"
@@ -42,17 +50,17 @@ health_ok() {
 }
 
 start() {
-  IMAGE_TAG="$1" docker compose up -d --remove-orphans
+  IMAGE_TAG="$1" $DOCKER compose up -d --remove-orphans
 }
 
-IMAGE_TAG="$NEW_TAG" docker compose pull backend
+IMAGE_TAG="$NEW_TAG" $DOCKER compose pull backend
 start "$NEW_TAG"
 
 if health_ok; then
   echo "$NEW_TAG" > .current-tag
 else
   echo "::error:: New image failed its health check." >&2
-  docker compose logs --tail 80 backend || true
+  $DOCKER compose logs --tail 80 backend || true
 
   if [[ -n "$PREVIOUS_TAG" ]]; then
     echo "Rolling back to $PREVIOUS_TAG"
@@ -72,6 +80,6 @@ if ! curl -fsS --max-time 15 "http://127.0.0.1:${PORT}/api/blockchain/status" | 
 fi
 
 # Keep the last few images; drop the rest so the droplet's disk does not fill up.
-docker image prune -f --filter 'until=168h' >/dev/null 2>&1 || true
+$DOCKER image prune -f --filter 'until=168h' >/dev/null 2>&1 || true
 
 echo "Deployed $NEW_TAG successfully"

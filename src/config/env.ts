@@ -52,6 +52,12 @@ const envSchema = z
      * Global API rate limit. The default is deliberately strict; raise it for a load test
      * or a scripted demo rather than removing the limiter.
      */
+    /**
+     * Reverse proxies in front of the app (nginx = 1). Without it every client appears to
+     * come from the proxy, so all of them share a single rate-limit budget.
+     */
+    TRUST_PROXY: z.coerce.number().int().nonnegative().default(0),
+
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
     /**
@@ -85,6 +91,14 @@ const envSchema = z
     FACE_PROVIDER: z.string().default('mock'),
     FACE_PROVIDER_URL: optional(z.url()),
     FACE_PROVIDER_KEY: optional(z.string()),
+    /**
+     * Lets production run on the mock NID and face providers. Only for a demonstration
+     * deployment with no real registry to connect to: anyone can register as anyone.
+     */
+    ALLOW_MOCK_PROVIDERS: z
+      .string()
+      .default('false')
+      .transform((value) => value === 'true'),
     FACE_MATCH_THRESHOLD: z.coerce.number().min(0).max(1).default(0.85),
     FACE_LIVENESS_REQUIRED: z
       .string()
@@ -138,10 +152,10 @@ const envSchema = z
     if (value.PII_ENCRYPTION_KEY === '00'.repeat(32)) {
       require('PII_ENCRYPTION_KEY', 'must be set to a real 32-byte key in production')
     }
-    if (value.NID_PROVIDER === 'mock') {
+    if (value.NID_PROVIDER === 'mock' && !value.ALLOW_MOCK_PROVIDERS) {
       require('NID_PROVIDER', 'the mock identity registry must never be used in production')
     }
-    if (value.FACE_PROVIDER === 'mock') {
+    if (value.FACE_PROVIDER === 'mock' && !value.ALLOW_MOCK_PROVIDERS) {
       require('FACE_PROVIDER', 'the mock face provider must never be used in production')
     }
   })

@@ -5,7 +5,7 @@
  * credential: five attempts is plenty, and the key includes the submitted identifier so
  * that rotating IP addresses does not reset the budget.
  */
-import { rateLimit, type Options } from 'express-rate-limit'
+import { ipKeyGenerator, rateLimit, type Options } from 'express-rate-limit'
 import type { Request } from 'express'
 import { env, isTest } from '../config/env.js'
 
@@ -29,7 +29,8 @@ function identifierKey(field: string) {
   return (req: Request): string => {
     const body = req.body as Record<string, unknown> | undefined
     const value = typeof body?.[field] === 'string' ? (body[field] as string) : ''
-    return `${req.ip ?? 'unknown'}:${value.trim().toLowerCase()}`
+    // ipKeyGenerator groups an IPv6 client by its /56, which it can otherwise rotate within freely.
+    return `${ipKeyGenerator(req.ip ?? 'unknown')}:${value.trim().toLowerCase()}`
   }
 }
 

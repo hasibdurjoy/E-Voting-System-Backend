@@ -1,4 +1,5 @@
 import express, { type Express } from 'express'
+import { env } from './config/env.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { notFound } from './middleware/notFound.js'
 import { requestLogger } from './middleware/requestLogger.js'
@@ -9,6 +10,8 @@ export function createApp(): Express {
   const app = express()
 
   app.disable('x-powered-by')
+  // Trust X-Forwarded-For only from the configured number of proxy hops, never blindly.
+  app.set('trust proxy', env.TRUST_PROXY)
 
   app.use(helmetMiddleware)
   app.use(corsMiddleware)

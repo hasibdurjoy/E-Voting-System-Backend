@@ -35,9 +35,9 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: yarn
@@ -84,7 +84,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
@@ -116,63 +116,100 @@ jobs:
     runs-on: ubuntu-latest
     # A GitHub environment holds the server secrets and can require a reviewer.
     environment: production
+    permissions:
+      contents: read
+      # Lets the server pull the private image with this run's own short-lived token.
+      packages: read
+
+    # Everything the server needs comes from here; nothing is configured on it by hand.
+    # Each setting is read from a variable or a secret of that name (Settings → Environments
+    # → production), falling back to the default shown.
+    #
+    #   Required secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (or DEPLOY_PASSWORD),
+    #                     BLOCKCHAIN_RPC_URL, BACKEND_PRIVATE_KEY
+    #   Optional:         API_DOMAIN, CORS_ORIGIN, CERTBOT_EMAIL, APP_PORT, DEPLOY_PATH,
+    #                     CONTRACT_ADDRESS, BLOCKCHAIN_START_BLOCK, TRUSTEE_ADDRESSES
+    env:
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || secrets.DEPLOY_PATH || 'e-voting-backend' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Copy the compose file and deploy script to the server
-        # The server needs no source checkout — only the compose definition, the deploy
-        # script and its own .env.
+      - name: Resolve the API domain
+        id: domain
+        env:
+          API_DOMAIN: ${{ vars.API_DOMAIN || secrets.API_DOMAIN }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        # Without a domain of its own the server gets one from sslip.io, which resolves
+        # api.1-2-3-4.sslip.io to 1.2.3.4 with no DNS setup — enough for a certificate.
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::error::Set the DEPLOY_HOST secret (the server's IP address)."; exit 1
+          fi
+          if [ -z "$API_DOMAIN" ]; then
+            if [[ "$DEPLOY_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              API_DOMAIN="api.${DEPLOY_HOST//./-}.sslip.io"
+            else
+              API_DOMAIN="$DEPLOY_HOST"
+            fi
+          fi
+          echo "name=$API_DOMAIN" >> "$GITHUB_OUTPUT"
+          echo "API will be served at https://$API_DOMAIN/api" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Copy the compose file and server scripts
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          source: 'docker-compose.yml,scripts/deploy-docker.sh'
-          target: ${{ secrets.DEPLOY_PATH }}
-          strip_components: 0
+          source: 'docker-compose.yml,scripts/deploy-docker.sh,scripts/provision.sh'
+          target: ${{ env.DEPLOY_PATH }}
 
-      - name: Deploy
+      - name: Provision and deploy
         uses: appleboy/ssh-action@v1.2.0
         env:
           IMAGE_TAG: ${{ github.sha }}
+          BACKEND_IMAGE: ${{ env.IMAGE_NAME }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          API_DOMAIN: ${{ steps.domain.outputs.name }}
+          CORS_ORIGIN: ${{ vars.CORS_ORIGIN || secrets.CORS_ORIGIN }}
+          CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL || secrets.CERTBOT_EMAIL }}
+          APP_PORT: ${{ vars.APP_PORT || secrets.APP_PORT || '5000' }}
+          BLOCKCHAIN_RPC_URL: ${{ secrets.BLOCKCHAIN_RPC_URL }}
+          BACKEND_PRIVATE_KEY: ${{ secrets.BACKEND_PRIVATE_KEY }}
+          CONTRACT_ADDRESS: ${{ vars.CONTRACT_ADDRESS || secrets.CONTRACT_ADDRESS || '0xF4A6d7C105021b40fa9A9DBA7e9e477D3dc83bE4' }}
+          BLOCKCHAIN_START_BLOCK: ${{ vars.BLOCKCHAIN_START_BLOCK || secrets.BLOCKCHAIN_START_BLOCK || '11939503' }}
+          TRUSTEE_ADDRESSES: ${{ vars.TRUSTEE_ADDRESSES || secrets.TRUSTEE_ADDRESSES }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: IMAGE_TAG
+          command_timeout: 20m
+          envs: IMAGE_TAG,BACKEND_IMAGE,GHCR_USER,GHCR_PASSWORD,API_DOMAIN,CORS_ORIGIN,CERTBOT_EMAIL,APP_PORT,BLOCKCHAIN_RPC_URL,BACKEND_PRIVATE_KEY,CONTRACT_ADDRESS,BLOCKCHAIN_START_BLOCK,TRUSTEE_ADDRESSES
           script: |
             set -euo pipefail
-            cd "${{ secrets.DEPLOY_PATH }}"
-
-            # Only needed while the GHCR package is private. Leave GHCR_TOKEN unset once
-            # the package is public and this is skipped.
-            if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
-              echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-            fi
-
-            # Which image this server pulls, recorded once so the compose file stays generic.
-            grep -q '^BACKEND_IMAGE=' .env 2>/dev/null || \
-              echo "BACKEND_IMAGE=ghcr.io/${{ github.repository_owner }}/e-voting-system-backend" >> .env
-
-            mv -f scripts/deploy-docker.sh ./deploy-docker.sh 2>/dev/null || true
-            rmdir scripts 2>/dev/null || true
-            chmod +x deploy-docker.sh
-
+            cd "${{ env.DEPLOY_PATH }}"
+            mv -f scripts/deploy-docker.sh scripts/provision.sh . && rmdir scripts 2>/dev/null || true
+            bash provision.sh
             bash deploy-docker.sh "$IMAGE_TAG"
 
       - name: Verify the service is answering from outside
         # A container reporting healthy internally can still be unreachable through nginx.
+        env:
+          HEALTH_URL: https://${{ steps.domain.outputs.name }}/api/health
         run: |
           for attempt in $(seq 1 10); do
-            if curl -fsS --max-time 10 "${{ secrets.HEALTH_CHECK_URL }}" | grep -q '"success":true'; then
-              echo "Health check passed"
+            if curl -fsS --max-time 10 "$HEALTH_URL" | grep -q '"success":true'; then
+              echo "Health check passed: $HEALTH_URL"
               exit 0
             fi
             echo "Attempt $attempt failed; retrying in 5s"
             sleep 5
           done
-          echo "::error::The deployed backend did not pass its health check"
+          echo "::error::$HEALTH_URL did not answer. If the deploy log shows a certificate warning, check DNS for the domain."
           exit 1
